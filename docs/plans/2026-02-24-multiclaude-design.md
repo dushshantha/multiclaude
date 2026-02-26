@@ -119,11 +119,20 @@ You: "build the auth epic from GitHub issue #42"
 
 ## Interaction Model
 
-- **Collaborative** — orchestrator runs autonomously but you can interrupt at any time
+Two modes, switchable at any time:
+
+**Collaborative (default)** — orchestrator runs autonomously but you can interrupt at any time:
 - Ask status: "what's happening with the OAuth task?"
 - Redirect: "deprioritize the docs task, focus on tests"
 - Cancel: "kill the refactor worker, we're changing direction"
-- High-risk actions (merges to main, destructive ops) always require your approval
+
+**Uninterrupted** — fully autonomous, orchestrator makes all decisions silently. Only contacts you for:
+- Failed retries exhausted (agent truly stuck)
+- Final merge to main (explicit approval gate)
+
+Switch modes naturally: "go uninterrupted" / "check in with me more often"
+
+High-risk actions (merges to main, destructive ops) always require your approval regardless of mode.
 
 ---
 
