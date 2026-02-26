@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MultiClaude</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Courier New', monospace; background: #1a1a2e; color: #e0e0e0; padding: 24px; }
+    h1 { color: #7c83fd; margin-bottom: 20px; font-size: 24px; }
+    .stats { display: flex; gap: 16px; margin-bottom: 24px; }
+    .stat { padding: 12px 20px; border-radius: 8px; background: #16213e; min-width: 100px; }
+    .stat .count { font-size: 28px; font-weight: bold; }
+    .stat .label { font-size: 12px; color: #888; margin-top: 4px; }
+    .stat.running .count { color: #7c83fd; }
+    .stat.done .count { color: #4ade80; }
+    .stat.failed .count { color: #f87171; }
+    .stat.pending .count { color: #888; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; padding: 8px 12px; color: #666; font-size: 12px; border-bottom: 1px solid #2a2a4e; }
+    td { padding: 8px 12px; border-bottom: 1px solid #1e1e3a; font-size: 13px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
+    .badge.pending { background: #2a2a4e; color: #888; }
+    .badge.in_progress { background: #1e1e5e; color: #7c83fd; }
+    .badge.done { background: #14532d; color: #4ade80; }
+    .badge.failed { background: #450a0a; color: #f87171; }
+    .badge.cancelled { background: #1a1a1a; color: #555; }
+    .retry { color: #fbbf24; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <h1>MultiClaude</h1>
+  <div class="stats">
+    <div class="stat running"><div class="count" id="running">0</div><div class="label">Running</div></div>
+    <div class="stat done"><div class="count" id="done">0</div><div class="label">Done</div></div>
+    <div class="stat failed"><div class="count" id="failed">0</div><div class="label">Failed</div></div>
+    <div class="stat pending"><div class="count" id="pending">0</div><div class="label">Pending</div></div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Task</th>
+        <th>Status</th>
+        <th>Branch</th>
+        <th>Agent</th>
+        <th>Retries</th>
+      </tr>
+    </thead>
+    <tbody id="tasks"></tbody>
+  </table>
+  <script>
+    const es = new EventSource('/api/events')
+    es.onmessage = ({ data }) => {
+      const { tasks } = JSON.parse(data)
+      document.getElementById('running').textContent = tasks.filter(t => t.status === 'in_progress').length
+      document.getElementById('done').textContent = tasks.filter(t => t.status === 'done').length
+      document.getElementById('failed').textContent = tasks.filter(t => t.status === 'failed').length
+      document.getElementById('pending').textContent = tasks.filter(t => t.status === 'pending').length
+      document.getElementById('tasks').innerHTML = tasks.map(t => `
+        <tr>
+          <td>${escapeHtml(t.title)}</td>
+          <td><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span></td>
+          <td>${escapeHtml(t.branch || '-')}</td>
+          <td>${escapeHtml(t.agent_id || '-')}</td>
+          <td>${t.retry_count > 0 ? `<span class="retry">⚠ ${t.retry_count}/${t.max_retries}</span>` : '-'}</td>
+        </tr>
+      `).join('')
+    }
+    function escapeHtml(str) {
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    }
+  </script>
+</body>
+</html>
