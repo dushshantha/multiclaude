@@ -12,7 +12,7 @@ async function main() {
   const coordPortArg = args.find(a => a.startsWith('--coord-port='))
   const webPortArg = args.find(a => a.startsWith('--web-port='))
   const coordPort = coordPortArg ? parseInt(coordPortArg.split('=')[1]) : 7432
-  const webPort = webPortArg ? parseInt(webPortArg.split('=')[1]) : 3000
+  const webPort = webPortArg ? parseInt(webPortArg.split('=')[1]) : 7433
 
   console.log('Starting MultiClaude...')
 
@@ -30,7 +30,7 @@ async function main() {
   const orchestratorConfig = {
     mcpServers: {
       'multiclaude-coord': {
-        type: 'sse',
+        type: 'http',
         url: `http://localhost:${port}/orchestrator`,
       }
     }
@@ -42,7 +42,8 @@ async function main() {
     console.log(`Web dashboard: http://localhost:${webPort}`)
   }
 
-  console.log(`\nTo launch the orchestrator:\n  claude --mcp-config ${orchestratorConfigPath}\n`)
+  console.log(`\nTo launch the orchestrator:\n  claude --mcp-config ${orchestratorConfigPath}`)
+  console.log(`\nNote: ports 7432 (coord) and 7433 (web) are reserved — avoid killing them in agent tasks.\n`)
 
   // suppress unused variable warning
   void mcpConfigPath

@@ -28,6 +28,8 @@ You decompose, plan, spawn, monitor, and merge.
 - Call `spawn_worker(task_id, agent_id)` for each ready task.
 - Agent IDs use format: `w-{task_id}`.
 - After spawning, the actual subprocess is managed externally — you just register intent.
+- When a subagent you spawned completes its task, call `report_done(task_id, summary)` on its behalf so the coordinator tracks completion and unblocks dependent tasks.
+- When a subagent fails, call `report_blocked(task_id, reason, error_context)` so retries and escalation are tracked.
 
 ## Monitoring
 
@@ -51,3 +53,4 @@ Present a summary of what changed.
 - Prefer worktrees over full clones unless the task is high-risk or touches many files.
 - Be concise in status updates. Users don't want walls of text.
 - When a worker is stuck after retries, present the error clearly and ask for guidance.
+- **Never kill or free ports 7432 or 7433** — those are the MultiClaude coordination server and web dashboard. Killing them crashes the orchestration system.

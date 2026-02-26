@@ -20,7 +20,7 @@ export function buildWorkerMcpConfig(opts: { serverPort: number }): WorkerMcpCon
   return {
     mcpServers: {
       'multiclaude-coord': {
-        type: 'sse',
+        type: 'http',
         url: `http://localhost:${opts.serverPort}/worker`,
       },
     },

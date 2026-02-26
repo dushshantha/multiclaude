@@ -1,5 +1,6 @@
 import express from 'express'
 import { createServer } from 'http'
+import { randomUUID } from 'crypto'
 import { createDb } from './state/db.js'
 import { handlePlanDag, handleGetSystemStatus, handleCancelTask } from './tools/orchestrator.js'
 import { handleGetMyTask, handleReportProgress, handleReportDone, handleReportBlocked } from './tools/worker.js'
@@ -10,15 +11,85 @@ import type { Server } from 'http'
 import { z } from 'zod'
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js'
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
+import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js'
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js'
+import type { OAuthServerProvider } from '@modelcontextprotocol/sdk/server/auth/provider.js'
+import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js'
+import type { OAuthClientInformationFull, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js'
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js'
 
 export interface CoordServerOptions {
   port?: number
   dbPath?: string
 }
 
+// Minimal in-memory OAuth provider for localhost.
+// Auto-approves all client registrations, authorizations, and token requests.
+// Suitable for local development only — do not expose to the internet.
+function createLocalhostOAuthProvider(): OAuthServerProvider {
+  const clients = new Map<string, OAuthClientInformationFull>()
+  const codes = new Map<string, string>() // authCode -> codeChallenge
+
+  const clientsStore: OAuthRegisteredClientsStore = {
+    getClient(clientId: string) {
+      return clients.get(clientId)
+    },
+    registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>) {
+      const full: OAuthClientInformationFull = {
+        ...client,
+        client_id: randomUUID(),
+        client_id_issued_at: Math.floor(Date.now() / 1000),
+      }
+      clients.set(full.client_id, full)
+      return full
+    },
+  }
+
+  return {
+    clientsStore,
+
+    // Auto-approve: immediately redirect back with an authorization code.
+    async authorize(client, params, res) {
+      const code = randomUUID()
+      codes.set(code, params.codeChallenge)
+      const redirectUrl = new URL(params.redirectUri)
+      redirectUrl.searchParams.set('code', code)
+      if (params.state) redirectUrl.searchParams.set('state', params.state)
+      res.redirect(302, redirectUrl.href)
+    },
+
+    // Return the stored challenge for PKCE validation.
+    async challengeForAuthorizationCode(_client: OAuthClientInformationFull, authorizationCode: string): Promise<string> {
+      const challenge = codes.get(authorizationCode)
+      if (!challenge) throw new Error('Unknown authorization code')
+      codes.delete(authorizationCode)
+      return challenge
+    },
+
+    // Issue tokens with 1-year expiry — no revocation needed for localhost.
+    async exchangeAuthorizationCode(): Promise<OAuthTokens> {
+      return { access_token: randomUUID(), token_type: 'Bearer', expires_in: 365 * 24 * 3600 }
+    },
+
+    async exchangeRefreshToken(): Promise<OAuthTokens> {
+      return { access_token: randomUUID(), token_type: 'Bearer', expires_in: 365 * 24 * 3600 }
+    },
+
+    // Accept any Bearer token — the 401 on first request is sufficient to trigger
+    // the OAuth flow; we don't need strict per-token tracking on localhost.
+    async verifyAccessToken(token: string): Promise<AuthInfo> {
+      return {
+        token,
+        clientId: 'localhost',
+        scopes: [],
+        expiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 3600,
+      }
+    },
+  }
+}
+
 // Factory: create a fresh McpServer with orchestrator tools bound to the given db.
-// Must be called per connection — McpServer is stateful and single-connection.
 function createOrchestratorMcp(db: Database.Database): McpServer {
   const server = new McpServer({ name: 'multiclaude-orchestrator', version: '1.0.0' })
 
@@ -132,50 +203,60 @@ export async function startCoordServer(opts: CoordServerOptions = {}): Promise<{
   const app = express()
   app.use(express.json())
 
-  // OAuth protected resource metadata.
-  // Returning this endpoint with no authorization_servers tells MCP clients
-  // (including Claude Code) that this is a known resource but auth is not enforced,
-  // resolving the "not authenticated" probe failure on localhost.
-  app.get('/.well-known/oauth-protected-resource', (_req, res) => {
-    res.json({
-      resource: `http://localhost:${port}`,
-      bearer_methods_supported: ['header'],
-      scopes_supported: [],
-    })
+  const issuerUrl = new URL(`http://localhost:${port}`)
+  const oauthProvider = createLocalhostOAuthProvider()
+
+  // Mount OAuth endpoints: /.well-known/*, /register, /authorize, /token
+  app.use(mcpAuthRouter({ provider: oauthProvider, issuerUrl }))
+
+  // Bearer auth middleware — returns 401 + WWW-Authenticate on first unauthenticated
+  // request, which triggers Claude Code's automatic OAuth flow.
+  const bearerAuth = requireBearerAuth({
+    verifier: oauthProvider,
+    resourceMetadataUrl: `http://localhost:${port}/.well-known/oauth-protected-resource`,
   })
 
-  // SSE transports — keyed by sessionId for message routing.
-  const orchestratorTransports: Record<string, SSEServerTransport> = {}
-  const workerTransports: Record<string, SSEServerTransport> = {}
+  // Session maps for Streamable HTTP transports (one transport per MCP session).
+  const orchestratorSessions = new Map<string, StreamableHTTPServerTransport>()
+  const workerSessions = new Map<string, StreamableHTTPServerTransport>()
 
-  // Orchestrator endpoint — create a fresh McpServer per connection.
-  app.get('/orchestrator', async (req, res) => {
-    const transport = new SSEServerTransport('/orchestrator/messages', res)
-    orchestratorTransports[transport.sessionId] = transport
-    res.on('close', () => { delete orchestratorTransports[transport.sessionId] })
+  // Orchestrator endpoint — Streamable HTTP handles both GET (SSE) and POST.
+  app.all('/orchestrator', bearerAuth, async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined
+
+    if (sessionId) {
+      const transport = orchestratorSessions.get(sessionId)
+      if (!transport) { res.status(404).json({ error: 'Session not found' }); return }
+      await transport.handleRequest(req, res, req.body)
+      return
+    }
+
+    // New session: create transport + McpServer pair.
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() })
     const mcp = createOrchestratorMcp(db)
     await mcp.connect(transport)
-  })
-  app.post('/orchestrator/messages', async (req, res) => {
-    const sessionId = req.query['sessionId'] as string
-    const transport = orchestratorTransports[sessionId]
-    if (!transport) { res.status(404).json({ error: 'Session not found' }); return }
-    await transport.handlePostMessage(req, res)
+    transport.onclose = () => { if (transport.sessionId) orchestratorSessions.delete(transport.sessionId) }
+    await transport.handleRequest(req, res, req.body)
+    if (transport.sessionId) orchestratorSessions.set(transport.sessionId, transport)
   })
 
-  // Worker endpoint — create a fresh McpServer per connection.
-  app.get('/worker', async (req, res) => {
-    const transport = new SSEServerTransport('/worker/messages', res)
-    workerTransports[transport.sessionId] = transport
-    res.on('close', () => { delete workerTransports[transport.sessionId] })
+  // Worker endpoint — same pattern.
+  app.all('/worker', bearerAuth, async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined
+
+    if (sessionId) {
+      const transport = workerSessions.get(sessionId)
+      if (!transport) { res.status(404).json({ error: 'Session not found' }); return }
+      await transport.handleRequest(req, res, req.body)
+      return
+    }
+
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() })
     const mcp = createWorkerMcp(db)
     await mcp.connect(transport)
-  })
-  app.post('/worker/messages', async (req, res) => {
-    const sessionId = req.query['sessionId'] as string
-    const transport = workerTransports[sessionId]
-    if (!transport) { res.status(404).json({ error: 'Session not found' }); return }
-    await transport.handlePostMessage(req, res)
+    transport.onclose = () => { if (transport.sessionId) workerSessions.delete(transport.sessionId) }
+    await transport.handleRequest(req, res, req.body)
+    if (transport.sessionId) workerSessions.set(transport.sessionId, transport)
   })
 
   const httpServer = createServer(app)
