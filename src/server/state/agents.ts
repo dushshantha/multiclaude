@@ -12,7 +12,7 @@ export interface Agent {
 }
 
 export function registerAgent(db: Database.Database, input: { id: string; task_id?: string; pid?: number; cwd?: string }): void {
-  db.prepare('INSERT INTO agents (id, task_id, pid, cwd) VALUES (@id, @task_id, @pid, @cwd)').run({
+  db.prepare('INSERT OR IGNORE INTO agents (id, task_id, pid, cwd) VALUES (@id, @task_id, @pid, @cwd)').run({
     id: input.id,
     task_id: input.task_id ?? null,
     pid: input.pid ?? null,

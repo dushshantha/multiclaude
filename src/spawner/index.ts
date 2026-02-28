@@ -53,7 +53,7 @@ export function buildWorkerArgs(cfg: SpawnConfig): string[] {
 export function spawnWorker(cfg: SpawnConfig): ChildProcess {
   return spawn('claude', buildWorkerArgs(cfg), {
     cwd: cfg.worktreePath,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: 'ignore',
     env: buildWorkerEnv(cfg.agentId),
   })
 }

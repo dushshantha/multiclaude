@@ -52,7 +52,7 @@ function startSpawnerWatcher(db: Database.Database, mcpConfigPath: string): void
         const current = db.prepare(
           "SELECT status FROM agents WHERE id = ?"
         ).get(agent.id) as { status: string } | undefined
-        if (current?.status === 'running') {
+        if (current?.status === 'running' || current?.status === 'spawning') {
           updateAgent(db, agent.id, { status: 'failed' })
         }
       })

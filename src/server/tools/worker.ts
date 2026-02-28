@@ -31,10 +31,15 @@ export function handleReportDone(
   taskId: string,
   summary: string
 ): void {
+  const task = getTask(db, taskId)
   updateTask(db, taskId, { status: 'done' })
   db.prepare(
     'INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)'
   ).run(taskId, 'info', `DONE: ${summary}`)
+  // Mark the agent done so the spawner watcher's exit handler doesn't flag it as failed
+  if (task?.agent_id) {
+    updateAgent(db, task.agent_id, { status: 'done' })
+  }
 }
 
 export function handleReportBlocked(

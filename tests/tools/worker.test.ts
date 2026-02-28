@@ -63,4 +63,12 @@ describe('worker tools', () => {
     const after = db.prepare("SELECT status FROM agents WHERE id = 'w-1'").get() as { status: string }
     expect(after.status).toBe('running')
   })
+
+  it('report_done marks agent status as done', () => {
+    // The task was set up with agent_id 'w-1' in beforeEach
+    registerAgent(db, { id: 'w-1', task_id: 'task-1' })
+    handleReportDone(db, 'task-1', 'done')
+    const agent = db.prepare("SELECT status FROM agents WHERE id = 'w-1'").get() as { status: string }
+    expect(agent.status).toBe('done')
+  })
 })
