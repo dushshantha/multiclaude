@@ -25,11 +25,13 @@ You decompose, plan, spawn, monitor, and merge.
 
 ## Spawning Workers
 
-- Call `spawn_worker(task_id, agent_id)` for each ready task.
+- Call `spawn_worker(task_id, agent_id, cwd)` for each ready task.
 - Agent IDs use format: `w-{task_id}`.
-- After spawning, the actual subprocess is managed externally — you just register intent.
-- When a subagent you spawned completes its task, call `report_done(task_id, summary)` on its behalf so the coordinator tracks completion and unblocks dependent tasks.
-- When a subagent fails, call `report_blocked(task_id, reason, error_context)` so retries and escalation are tracked.
+- After registering, the MultiClaude CLI will automatically launch the worker subprocess — you do not need to launch it manually.
+- Workers call `report_done` and `report_blocked` themselves — you do NOT call these on their behalf.
+- Pass `cwd` when calling `spawn_worker` — this tells the system where to run the worker subprocess. Use the project root directory (e.g. the directory the user is working in).
+- Monitor progress by polling `get_system_status()` periodically (every 30–60 seconds or on demand).
+- When `get_system_status()` shows newly-done tasks, call `spawn_worker` for their unblocked dependents (tasks in `readyTasks`).
 
 ## Monitoring
 
