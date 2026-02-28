@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createDb, closeDb } from '../../src/server/state/db.js'
-import { handlePlanDag, handleGetSystemStatus, handleCancelTask } from '../../src/server/tools/orchestrator.js'
+import { handlePlanDag, handleGetSystemStatus, handleCancelTask, handleSpawnWorker } from '../../src/server/tools/orchestrator.js'
+import { addEdge } from '../../src/server/state/dag.js'
 import type Database from 'better-sqlite3'
 
 describe('orchestrator tools', () => {
@@ -39,5 +40,33 @@ describe('orchestrator tools', () => {
     handleCancelTask(db, 't1')
     const task = db.prepare("SELECT status FROM tasks WHERE id = 't1'").get() as { status: string }
     expect(task.status).toBe('cancelled')
+  })
+
+  it('spawn_worker succeeds when task has no blockers', () => {
+    db.prepare("INSERT INTO tasks (id, title) VALUES ('t1', 'Task 1')").run()
+    const result = handleSpawnWorker(db, 't1', 'w-t1', { cwd: '/tmp' })
+    expect(result.ok).toBe(true)
+    const task = db.prepare("SELECT status, agent_id FROM tasks WHERE id = 't1'").get() as { status: string; agent_id: string }
+    expect(task.status).toBe('in_progress')
+    expect(task.agent_id).toBe('w-t1')
+    const agent = db.prepare("SELECT cwd FROM agents WHERE id = 'w-t1'").get() as { cwd: string }
+    expect(agent.cwd).toBe('/tmp')
+  })
+
+  it('spawn_worker fails when a blocker is not done', () => {
+    db.prepare("INSERT INTO tasks (id, title) VALUES ('blocker', 'Blocker')").run()
+    db.prepare("INSERT INTO tasks (id, title) VALUES ('dependent', 'Dependent')").run()
+    addEdge(db, 'blocker', 'dependent')
+    const result = handleSpawnWorker(db, 'dependent', 'w-dep')
+    expect(result.ok).toBe(false)
+    expect((result as { ok: false; error: string }).error).toContain('blocker')
+  })
+
+  it('spawn_worker succeeds when all blockers are done', () => {
+    db.prepare("INSERT INTO tasks (id, title, status) VALUES ('blocker', 'Blocker', 'done')").run()
+    db.prepare("INSERT INTO tasks (id, title) VALUES ('dependent', 'Dependent')").run()
+    addEdge(db, 'blocker', 'dependent')
+    const result = handleSpawnWorker(db, 'dependent', 'w-dep')
+    expect(result.ok).toBe(true)
   })
 })

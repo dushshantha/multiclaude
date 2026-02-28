@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
-import { createTask, listTasks } from '../state/tasks.js'
-import { addEdge, getReadyTasks } from '../state/dag.js'
-import { listAgents } from '../state/agents.js'
+import { createTask, listTasks, getTask, updateTask } from '../state/tasks.js'
+import { addEdge, getReadyTasks, getBlockers } from '../state/dag.js'
+import { listAgents, registerAgent } from '../state/agents.js'
 
 export interface EpicTask {
   id: string
@@ -41,4 +41,28 @@ export function handleCancelTask(db: Database.Database, taskId: string): void {
   db.prepare(
     "UPDATE tasks SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?"
   ).run(taskId)
+}
+
+export function handleSpawnWorker(
+  db: Database.Database,
+  taskId: string,
+  agentId: string,
+  opts: { pid?: number; cwd?: string } = {}
+): { ok: true } | { ok: false; error: string } {
+  // DAG guard: all upstream blockers must be 'done'
+  const blockers = getBlockers(db, taskId)
+  const notDone = blockers.filter(blockerId => {
+    const t = getTask(db, blockerId)
+    return !t || t.status !== 'done'
+  })
+  if (notDone.length > 0) {
+    return {
+      ok: false,
+      error: `Cannot spawn task ${taskId}: blocked by [${notDone.join(', ')}] which are not done`,
+    }
+  }
+
+  registerAgent(db, { id: agentId, task_id: taskId, pid: opts.pid, cwd: opts.cwd })
+  updateTask(db, taskId, { status: 'in_progress', agent_id: agentId })
+  return { ok: true }
 }

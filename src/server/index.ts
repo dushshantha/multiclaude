@@ -2,10 +2,8 @@ import express from 'express'
 import { createServer } from 'http'
 import { randomUUID } from 'crypto'
 import { createDb } from './state/db.js'
-import { handlePlanDag, handleGetSystemStatus, handleCancelTask } from './tools/orchestrator.js'
+import { handlePlanDag, handleGetSystemStatus, handleCancelTask, handleSpawnWorker } from './tools/orchestrator.js'
 import { handleGetMyTask, handleReportProgress, handleReportDone, handleReportBlocked } from './tools/worker.js'
-import { registerAgent } from './state/agents.js'
-import { updateTask } from './state/tasks.js'
 import type Database from 'better-sqlite3'
 import type { Server } from 'http'
 import { z } from 'zod'
@@ -124,11 +122,13 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
 
   server.tool(
     'spawn_worker',
-    'Register a worker agent for a task',
-    { task_id: z.string(), agent_id: z.string(), pid: z.number().optional() },
-    async ({ task_id, agent_id, pid }) => {
-      registerAgent(db, { id: agent_id, task_id, pid })
-      updateTask(db, task_id, { status: 'in_progress', agent_id })
+    'Register a worker agent for a task. Returns an error if any DAG blockers are not done. Pass cwd (the directory to run the worker in).',
+    { task_id: z.string(), agent_id: z.string(), pid: z.number().optional(), cwd: z.string().optional() },
+    async ({ task_id, agent_id, pid, cwd }) => {
+      const result = handleSpawnWorker(db, task_id, agent_id, { pid, cwd })
+      if (!result.ok) {
+        return { content: [{ type: 'text' as const, text: `ERROR: ${result.error}` }], isError: true }
+      }
       return { content: [{ type: 'text' as const, text: `Worker ${agent_id} registered for task ${task_id}` }] }
     }
   )
