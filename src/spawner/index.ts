@@ -8,6 +8,7 @@ export interface SpawnConfig {
   taskId: string
   taskTitle: string
   taskDescription?: string
+  agentId: string
   worktreePath: string
   mcpConfigPath: string
 }
@@ -27,14 +28,19 @@ export function buildWorkerMcpConfig(opts: { serverPort: number }): WorkerMcpCon
   }
 }
 
+export function buildWorkerEnv(agentId: string): NodeJS.ProcessEnv {
+  return { ...process.env, MULTICLAUDE_AGENT_ID: agentId }
+}
+
 export function buildWorkerArgs(cfg: SpawnConfig): string[] {
   const prompt = [
+    `You are MultiClaude worker agent "${cfg.agentId}".`,
     `Your assigned task is: "${cfg.taskTitle}"`,
     cfg.taskDescription ? `\nDescription: ${cfg.taskDescription}` : '',
-    '\n\nYou have access to multiclaude-coord MCP tools.',
-    '\nStart by calling get_my_task() to get full task context, then implement the task.',
-    '\nUse report_progress() to send status updates.',
-    '\nUse report_done() when complete. Use report_blocked() if you encounter errors.',
+    `\n\nYour agent ID is: ${cfg.agentId}`,
+    '\nStart by calling get_my_task with your agent_id to get full task context, then implement the task.',
+    '\nUse report_progress to send status updates at key checkpoints.',
+    '\nWhen complete, call report_done with a summary. If blocked, call report_blocked.',
   ].join('')
 
   return [
@@ -48,7 +54,7 @@ export function spawnWorker(cfg: SpawnConfig): ChildProcess {
   return spawn('claude', buildWorkerArgs(cfg), {
     cwd: cfg.worktreePath,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env },
+    env: buildWorkerEnv(cfg.agentId),
   })
 }
 
