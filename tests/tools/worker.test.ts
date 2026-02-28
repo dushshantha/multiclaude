@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createDb, closeDb } from '../../src/server/state/db.js'
 import { createTask, updateTask } from '../../src/server/state/tasks.js'
+import { registerAgent } from '../../src/server/state/agents.js'
 import {
   handleGetMyTask,
   handleReportProgress,
@@ -49,5 +50,17 @@ describe('worker tools', () => {
     updateTask(db, 'task-1', { retry_count: 3 })
     const result = handleReportBlocked(db, 'task-1', 'test failure', 'npm test failed')
     expect(result.action).toBe('escalate')
+  })
+
+  it('get_my_task transitions agent status from spawning to running', () => {
+    // Register agent as spawning (default status)
+    registerAgent(db, { id: 'w-1', task_id: 'task-1' })
+    const before = db.prepare("SELECT status FROM agents WHERE id = 'w-1'").get() as { status: string }
+    expect(before.status).toBe('spawning')
+
+    handleGetMyTask(db, 'w-1')
+
+    const after = db.prepare("SELECT status FROM agents WHERE id = 'w-1'").get() as { status: string }
+    expect(after.status).toBe('running')
   })
 })

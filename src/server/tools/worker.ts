@@ -1,12 +1,17 @@
 import type Database from 'better-sqlite3'
 import { getTask, updateTask } from '../state/tasks.js'
 import type { Task } from '../state/tasks.js'
+import { updateAgent } from '../state/agents.js'
 
 export function handleGetMyTask(db: Database.Database, agentId: string): Task {
   const task = db.prepare(
     "SELECT * FROM tasks WHERE agent_id = ? AND status = 'in_progress'"
   ).get(agentId) as Task | undefined
   if (!task) throw new Error(`No in-progress task found for agent ${agentId}`)
+
+  // Mark agent as running now that it has acknowledged its task
+  updateAgent(db, agentId, { status: 'running' })
+
   return task
 }
 
