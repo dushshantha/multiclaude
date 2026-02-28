@@ -4,9 +4,12 @@ import { startTui } from './tui/index.js'
 import { spawnWorker, writeWorkerMcpConfig } from './spawner/index.js'
 import { getTask } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
-import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs'
-import { join } from 'path'
+import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
 import type Database from 'better-sqlite3'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 interface AgentRow {
   id: string
@@ -107,7 +110,19 @@ async function main() {
     console.log(`Web dashboard: http://localhost:${webPort}`)
   }
 
-  console.log(`\nTo launch the orchestrator:\n  claude --mcp-config ${orchestratorConfigPath}`)
+  // Write orchestrator CLAUDE.md to a dedicated session directory.
+  // Running `claude` from this directory ensures the orchestrator prompt is loaded
+  // as CLAUDE.md context, which overrides global skills (brainstorming etc.).
+  const orchSessionDir = join(homeDir, '.claude', 'multiclaude-orchestrator-session')
+  mkdirSync(orchSessionDir, { recursive: true })
+  const orchestratorPromptPath = join(__dirname, '..', 'prompts', 'orchestrator.md')
+  if (existsSync(orchestratorPromptPath)) {
+    const prompt = readFileSync(orchestratorPromptPath, 'utf-8')
+    writeFileSync(join(orchSessionDir, 'CLAUDE.md'), prompt)
+  }
+
+  console.log(`\nTo launch the orchestrator:`)
+  console.log(`  cd ${orchSessionDir} && claude --mcp-config ${orchestratorConfigPath}`)
   console.log(`\nNote: ports ${coordPort} (coord) and ${webPort} (web) are reserved — avoid killing them in agent tasks.\n`)
 
   if (!noTui) {
