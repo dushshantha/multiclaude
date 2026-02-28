@@ -4,7 +4,7 @@ import { startTui } from './tui/index.js'
 import { spawnWorker, writeWorkerMcpConfig } from './spawner/index.js'
 import { getTask } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
-import { writeFileSync, mkdirSync } from 'fs'
+import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import type Database from 'better-sqlite3'
 
@@ -68,6 +68,15 @@ async function main() {
   const webPortArg = args.find(a => a.startsWith('--web-port='))
   const coordPort = coordPortArg ? parseInt(coordPortArg.split('=')[1]) : 7432
   const webPort = webPortArg ? parseInt(webPortArg.split('=')[1]) : 7433
+
+  const reset = args.includes('--reset')
+  if (reset) {
+    const dbPath = join(process.cwd(), 'multiclaude.db')
+    for (const f of [dbPath, dbPath + '-shm', dbPath + '-wal']) {
+      if (existsSync(f)) rmSync(f)
+    }
+    console.log('Database reset.')
+  }
 
   console.log('Starting MultiClaude...')
 

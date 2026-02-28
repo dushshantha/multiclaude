@@ -2,7 +2,7 @@ import express from 'express'
 import { createServer } from 'http'
 import { randomUUID } from 'crypto'
 import { createDb } from './state/db.js'
-import { handlePlanDag, handleGetSystemStatus, handleCancelTask, handleSpawnWorker } from './tools/orchestrator.js'
+import { handlePlanDag, handleGetSystemStatus, handleCancelTask, handleSpawnWorker, handleCompleteTask } from './tools/orchestrator.js'
 import { handleGetMyTask, handleReportProgress, handleReportDone, handleReportBlocked } from './tools/worker.js'
 import type Database from 'better-sqlite3'
 import type { Server } from 'http'
@@ -140,6 +140,16 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
     async ({ task_id }) => {
       handleCancelTask(db, task_id)
       return { content: [{ type: 'text' as const, text: `Task ${task_id} cancelled` }] }
+    }
+  )
+
+  server.tool(
+    'complete_task',
+    'Manually mark a task as done. Use only as a recovery measure when a worker completed work but failed to call report_done (e.g. the subprocess crashed). Marks the task and its agent as done.',
+    { task_id: z.string(), summary: z.string() },
+    async ({ task_id, summary }) => {
+      handleCompleteTask(db, task_id, summary)
+      return { content: [{ type: 'text' as const, text: `Task ${task_id} marked as done` }] }
     }
   )
 

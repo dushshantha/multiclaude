@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import { createTask, listTasks, getTask, updateTask } from '../state/tasks.js'
 import { addEdge, getReadyTasks, getBlockers } from '../state/dag.js'
-import { listAgents, registerAgent } from '../state/agents.js'
+import { listAgents, registerAgent, updateAgent } from '../state/agents.js'
 
 export interface EpicTask {
   id: string
@@ -41,6 +41,22 @@ export function handleCancelTask(db: Database.Database, taskId: string): void {
   db.prepare(
     "UPDATE tasks SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?"
   ).run(taskId)
+}
+
+export function handleCompleteTask(
+  db: Database.Database,
+  taskId: string,
+  summary: string
+): void {
+  updateTask(db, taskId, { status: 'done' })
+  db.prepare(
+    'INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)'
+  ).run(taskId, 'info', `DONE (orchestrator override): ${summary}`)
+  // Mark the associated agent done too so the dashboard reflects correctly
+  const task = getTask(db, taskId)
+  if (task?.agent_id) {
+    updateAgent(db, task.agent_id, { status: 'done' })
+  }
 }
 
 export function handleSpawnWorker(
