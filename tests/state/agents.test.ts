@@ -35,4 +35,10 @@ describe('agents', () => {
   it('returns null for missing agent', () => {
     expect(getAgent(db, 'nonexistent')).toBeNull()
   })
+
+  it('stores and retrieves cwd on agent', () => {
+    registerAgent(db, { id: 'w-1', task_id: 'task-1', pid: 1, cwd: '/tmp/my-project' })
+    const agent = getAgent(db, 'w-1')
+    expect(agent?.cwd).toBe('/tmp/my-project')
+  })
 })

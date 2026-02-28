@@ -29,6 +29,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
       task_id TEXT,
       pid INTEGER,
       status TEXT NOT NULL DEFAULT 'spawning',
+      cwd TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -41,6 +42,8 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `)
+  // Migrations: add columns that may be missing in older DBs
+  try { db.exec("ALTER TABLE agents ADD COLUMN cwd TEXT") } catch { /* already exists */ }
   return db
 }
 
