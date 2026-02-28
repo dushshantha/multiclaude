@@ -1,9 +1,64 @@
 import { startCoordServer } from './server/index.js'
 import { startWebServer } from './web/server.js'
 import { startTui } from './tui/index.js'
-import { writeWorkerMcpConfig } from './spawner/index.js'
+import { spawnWorker, writeWorkerMcpConfig } from './spawner/index.js'
+import { getTask } from './server/state/tasks.js'
+import { updateAgent } from './server/state/agents.js'
 import { writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
+import type Database from 'better-sqlite3'
+
+interface AgentRow {
+  id: string
+  task_id: string | null
+  cwd: string | null
+  pid: number | null
+  status: string
+}
+
+function startSpawnerWatcher(db: Database.Database, mcpConfigPath: string): void {
+  const launched = new Set<string>()
+
+  setInterval(() => {
+    const agents = db.prepare(
+      "SELECT * FROM agents WHERE status = 'spawning'"
+    ).all() as AgentRow[]
+
+    for (const agent of agents) {
+      if (launched.has(agent.id)) continue  // already launched this agent
+      if (!agent.cwd) continue              // no working directory — skip
+      if (!agent.task_id) continue          // no task — skip
+
+      const task = getTask(db, agent.task_id)
+      if (!task) continue
+
+      launched.add(agent.id)
+
+      const child = spawnWorker({
+        taskId: task.id,
+        taskTitle: task.title,
+        taskDescription: task.description ?? undefined,
+        agentId: agent.id,
+        worktreePath: agent.cwd,
+        mcpConfigPath,
+      })
+
+      if (child.pid !== undefined) {
+        updateAgent(db, agent.id, { pid: child.pid })
+      }
+
+      child.on('exit', () => {
+        // If worker exited without calling report_done, mark agent as failed
+        const current = db.prepare(
+          "SELECT status FROM agents WHERE id = ?"
+        ).get(agent.id) as { status: string } | undefined
+        if (current?.status === 'running') {
+          updateAgent(db, agent.id, { status: 'failed' })
+        }
+      })
+    }
+  }, 1000)
+}
 
 async function main() {
   const args = process.argv.slice(2)
@@ -19,10 +74,11 @@ async function main() {
   const { db, port } = await startCoordServer({ port: coordPort })
   console.log(`Coordination server: http://localhost:${port}`)
 
-  // Write worker MCP config
   const mcpConfigPath = writeWorkerMcpConfig(port)
 
-  // Write orchestrator MCP config
+  // Start watcher: polls DB for spawning agents and launches claude subprocesses
+  startSpawnerWatcher(db, mcpConfigPath)
+
   const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? '.'
   const claudeDir = join(homeDir, '.claude')
   mkdirSync(claudeDir, { recursive: true })
@@ -43,10 +99,7 @@ async function main() {
   }
 
   console.log(`\nTo launch the orchestrator:\n  claude --mcp-config ${orchestratorConfigPath}`)
-  console.log(`\nNote: ports 7432 (coord) and 7433 (web) are reserved — avoid killing them in agent tasks.\n`)
-
-  // suppress unused variable warning
-  void mcpConfigPath
+  console.log(`\nNote: ports ${coordPort} (coord) and ${webPort} (web) are reserved — avoid killing them in agent tasks.\n`)
 
   if (!noTui) {
     startTui(db)
