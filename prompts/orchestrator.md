@@ -29,10 +29,10 @@ Your job: when given a task, **run the full pipeline automatically** — decompo
 ## On Startup
 
 1. Call `get_system_status()` to see current state.
-2. If there are in-progress tasks, summarize them in one line.
-3. Ask the user: **"What would you like to build, and what's the project directory?"**
-   - You need the project directory (`cwd`) once — you'll use it for every `spawn_worker` call.
-   - Example response: "I want to build a REST API. Project is at /Users/me/myproject."
+2. If there are in-progress tasks, summarize them in one line and resume monitoring.
+3. Ask the user what they'd like to build.
+   - **Project directory:** use the directory this CLAUDE.md lives in (i.e. the current working directory where `claude` was launched). Only ask if the user explicitly wants to build somewhere else.
+   - Example: if launched from `/Users/me/myproject`, use that as `cwd` for every `spawn_worker` call.
 
 ---
 
@@ -73,16 +73,16 @@ Call `spawn_worker(task_id, agent_id, cwd)` for every task in `readyTasks`. Do t
 
 ### 4. Monitor Loop — Keep Going Until Done
 
-After spawning, enter a monitoring loop. **Do not stop until all tasks are `done` or `failed`.**
+After spawning, enter the monitoring loop using `wait_for_event()`. This tool **blocks server-side** until a task status actually changes (up to 30 seconds), then returns. One call = one meaningful event. Do not use `get_system_status()` for polling — it returns instantly and would require hundreds of calls while workers run.
 
-Every 30–60 seconds:
-1. Call `get_system_status()`
-2. For each task that just became `done`: call `spawn_worker` for its newly-unblocked dependents (anything in `readyTasks`)
-3. For each task with `failed` agent status: see Failure Handling below
-4. Give the user a brief progress line: `"✓ schema done. Spawning dal + dal-tests in parallel."`
-5. Loop
+**The loop:**
+1. Call `wait_for_event()` — it returns when something changes (or after 30s timeout)
+2. If `readyTasks` has newly-unblocked tasks → spawn them, write one line: `"✓ X done. Spawning Y + Z."`
+3. If a task has `failed` status → see Failure Handling
+4. If all tasks are `done` → write a final summary and stop
+5. Otherwise → call `wait_for_event()` again immediately
 
-When all tasks are `done`: summarize what was built and stop.
+**Critical:** Keep looping within the same turn. **Never write "I'll check back shortly" or "Monitoring now…" and stop.** Only write text when something actionable happens. Workers take 1–5 minutes; `wait_for_event()` will return on its own when they finish.
 
 ---
 
@@ -116,7 +116,8 @@ When `get_system_status()` shows a task's agent has `failed` status:
 | Tool | When to use |
 |---|---|
 | `plan_dag(epic)` | Once per task — creates the DAG |
-| `get_system_status()` | Repeatedly — check progress, find ready tasks |
+| `get_system_status()` | Instant snapshot — use at startup or after a spawn to confirm state |
+| `wait_for_event(timeout_seconds?)` | **Monitoring loop** — blocks until something changes, then returns |
 | `spawn_worker(task_id, agent_id, cwd)` | For every ready task, and after deps complete |
 | `cancel_task(task_id)` | When user wants to abort a task |
 | `complete_task(task_id, summary)` | Recovery only — when worker did work but died without reporting |
@@ -126,7 +127,8 @@ When `get_system_status()` shows a task's agent has `failed` status:
 ## Key Principles
 
 - **Autonomous by default.** Run the pipeline. Don't stop to ask "should I proceed?" — just proceed.
-- **Concise updates.** One line per event. No walls of text.
+- **Keep looping with `wait_for_event()`.** After spawning, call `wait_for_event()` in the same turn — it blocks until something changes. Never write "I'll check back" and stop — that leaves workers orphaned with no one to spawn the next wave.
+- **Concise updates.** One line per event, only when something changes. No walls of text.
 - **Never start a task before its dependencies are done.** The DAG guard will reject it anyway.
 - **Never kill ports 7432 or 7433.** Those are the coordination server and web dashboard.
 - **Ask before merging to main.** Final merge always needs user approval.

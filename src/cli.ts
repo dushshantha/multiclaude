@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { startCoordServer } from './server/index.js'
 import { startWebServer } from './web/server.js'
 import { startTui } from './tui/index.js'
@@ -5,11 +6,10 @@ import { spawnWorker, writeWorkerMcpConfig } from './spawner/index.js'
 import { getTask } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
-import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import { join } from 'path'
+import { execSync } from 'child_process'
+import { runInit } from './init.js'
 import type Database from 'better-sqlite3'
-
-const __dirname = dirname(fileURLToPath(import.meta.url))
 
 interface AgentRow {
   id: string
@@ -37,6 +37,11 @@ function startSpawnerWatcher(db: Database.Database, mcpConfigPath: string): void
 
       launched.add(agent.id)
 
+      // Ensure the working directory exists — the first task in a DAG is often
+      // a scaffold task that creates the project dir, but spawn fails with ENOENT
+      // if the cwd doesn't exist before the process starts.
+      mkdirSync(agent.cwd, { recursive: true })
+
       const child = spawnWorker({
         taskId: task.id,
         taskTitle: task.title,
@@ -49,6 +54,13 @@ function startSpawnerWatcher(db: Database.Database, mcpConfigPath: string): void
       if (child.pid !== undefined) {
         updateAgent(db, agent.id, { pid: child.pid })
       }
+
+      child.on('error', (err) => {
+        // spawn failed (e.g. 'claude' binary not found) — mark agent failed so
+        // the orchestrator can retry instead of waiting forever
+        console.error(`[spawner] Failed to launch worker ${agent.id}: ${err.message}`)
+        updateAgent(db, agent.id, { status: 'failed' })
+      })
 
       child.on('exit', () => {
         // If worker exited without calling report_done, mark agent as failed
@@ -65,6 +77,14 @@ function startSpawnerWatcher(db: Database.Database, mcpConfigPath: string): void
 
 async function main() {
   const args = process.argv.slice(2)
+  const subcommand = args[0] && !args[0].startsWith('--') ? args[0] : 'start'
+
+  if (subcommand === 'init') {
+    runInit({ projectDir: process.cwd() })
+    return
+  }
+
+  // --- start (default) ---
   const noTui = args.includes('--no-tui')
   const noWeb = args.includes('--no-web')
   const coordPortArg = args.find(a => a.startsWith('--coord-port='))
@@ -91,38 +111,30 @@ async function main() {
   // Start watcher: polls DB for spawning agents and launches claude subprocesses
   startSpawnerWatcher(db, mcpConfigPath)
 
-  const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? '.'
-  const claudeDir = join(homeDir, '.claude')
-  mkdirSync(claudeDir, { recursive: true })
-  const orchestratorConfigPath = join(claudeDir, 'multiclaude-orchestrator-mcp.json')
-  const orchestratorConfig = {
-    mcpServers: {
-      'multiclaude-coord': {
-        type: 'http',
-        url: `http://localhost:${port}/orchestrator`,
-      }
-    }
+  // Register multiclaude-coord in Claude Code's user config via `claude mcp add`.
+  // Claude Code stores user-level MCP servers in ~/.claude.json — using the CLI
+  // ensures the correct format regardless of Claude Code version.
+  const mcpUrl = `http://localhost:${port}/orchestrator`
+  try {
+    // Remove stale entry first (ignore errors if it doesn't exist)
+    execSync('claude mcp remove multiclaude-coord', { stdio: 'pipe' })
+  } catch { /* not found — that's fine */ }
+  try {
+    execSync(`claude mcp add -t http -s user multiclaude-coord ${mcpUrl}`, { stdio: 'pipe' })
+    console.log(`MCP server registered: multiclaude-coord → ${mcpUrl}`)
+  } catch (e) {
+    console.warn(`Warning: could not register MCP server automatically.`)
+    console.warn(`Run manually: claude mcp add -t http -s user multiclaude-coord ${mcpUrl}`)
   }
-  writeFileSync(orchestratorConfigPath, JSON.stringify(orchestratorConfig, null, 2))
 
   if (!noWeb) {
     startWebServer(db, webPort)
     console.log(`Web dashboard: http://localhost:${webPort}`)
   }
 
-  // Write orchestrator CLAUDE.md to a dedicated session directory.
-  // Running `claude` from this directory ensures the orchestrator prompt is loaded
-  // as CLAUDE.md context, which overrides global skills (brainstorming etc.).
-  const orchSessionDir = join(homeDir, '.claude', 'multiclaude-orchestrator-session')
-  mkdirSync(orchSessionDir, { recursive: true })
-  const orchestratorPromptPath = join(__dirname, '..', 'prompts', 'orchestrator.md')
-  if (existsSync(orchestratorPromptPath)) {
-    const prompt = readFileSync(orchestratorPromptPath, 'utf-8')
-    writeFileSync(join(orchSessionDir, 'CLAUDE.md'), prompt)
-  }
-
-  console.log(`\nTo launch the orchestrator:`)
-  console.log(`  cd ${orchSessionDir} && claude --mcp-config ${orchestratorConfigPath}`)
+  console.log(`\nMultiClaude running!`)
+  console.log(`  Connect a project:  multiclaude init   (run from your project directory)`)
+  console.log(`  Then just run:      claude`)
   console.log(`\nNote: ports ${coordPort} (coord) and ${webPort} (web) are reserved — avoid killing them in agent tasks.\n`)
 
   if (!noTui) {
@@ -131,6 +143,14 @@ async function main() {
     console.log('MultiClaude running. Press Ctrl+C to stop.')
   }
 }
+
+// Catch any unhandled rejections/exceptions so the server never silently dies
+process.on('uncaughtException', (err) => {
+  console.error('[MultiClaude] Uncaught exception (server kept alive):', err.message)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[MultiClaude] Unhandled rejection (server kept alive):', reason)
+})
 
 main().catch(err => {
   console.error('Fatal error:', err)

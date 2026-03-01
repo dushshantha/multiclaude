@@ -10,7 +10,8 @@
     "start": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "tsc"
+    "build": "tsc && cp -r src/web/public dist/web/",
+    "prepare": "npm run build"
   },
   "bin": {
     "multiclaude": "./dist/cli.js"

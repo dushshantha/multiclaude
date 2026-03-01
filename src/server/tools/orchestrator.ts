@@ -37,6 +37,28 @@ export function handleGetSystemStatus(db: Database.Database): {
   }
 }
 
+/**
+ * Block until any task status changes, then return full system status.
+ * Polls the DB every second server-side. The orchestrator calls this once
+ * per "wait" instead of hammering get_system_status() in a tight loop.
+ */
+export async function handleWaitForEvent(
+  db: Database.Database,
+  timeoutSeconds = 30,
+): Promise<ReturnType<typeof handleGetSystemStatus>> {
+  const deadline = Date.now() + timeoutSeconds * 1000
+  const snapshot = () =>
+    JSON.stringify(listTasks(db).map(t => ({ id: t.id, status: t.status })))
+  const initial = snapshot()
+
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    if (snapshot() !== initial) break
+  }
+
+  return handleGetSystemStatus(db)
+}
+
 export function handleCancelTask(db: Database.Database, taskId: string): void {
   db.prepare(
     "UPDATE tasks SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?"

@@ -2,7 +2,7 @@ import express from 'express'
 import { createServer } from 'http'
 import { randomUUID } from 'crypto'
 import { createDb } from './state/db.js'
-import { handlePlanDag, handleGetSystemStatus, handleCancelTask, handleSpawnWorker, handleCompleteTask } from './tools/orchestrator.js'
+import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker, handleCompleteTask } from './tools/orchestrator.js'
 import { handleGetMyTask, handleReportProgress, handleReportDone, handleReportBlocked } from './tools/worker.js'
 import type Database from 'better-sqlite3'
 import type { Server } from 'http'
@@ -112,10 +112,20 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
 
   server.tool(
     'get_system_status',
-    'Get full system status',
+    'Get full system status (instant snapshot)',
     {},
     async () => {
       const status = handleGetSystemStatus(db)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(status, null, 2) }] }
+    }
+  )
+
+  server.tool(
+    'wait_for_event',
+    'Block until any task status changes, then return full system status. Use this in the monitoring loop instead of repeatedly calling get_system_status — it waits server-side so you don\'t burn context spinning. Polls every 1s for up to timeout_seconds (default 30).',
+    { timeout_seconds: z.number().optional() },
+    async ({ timeout_seconds }) => {
+      const status = await handleWaitForEvent(db, timeout_seconds ?? 30)
       return { content: [{ type: 'text' as const, text: JSON.stringify(status, null, 2) }] }
     }
   )
@@ -211,7 +221,8 @@ export async function startCoordServer(opts: CoordServerOptions = {}): Promise<{
   const port = opts.port ?? 7432
   const db = createDb(opts.dbPath ?? './multiclaude.db')
   const app = express()
-  app.use(express.json())
+  // Do NOT add express.json() here — MCP Streamable HTTP transport reads the
+  // raw request body itself (and may send ndjson batches that body-parser rejects).
 
   const issuerUrl = new URL(`http://localhost:${port}`)
   const oauthProvider = createLocalhostOAuthProvider()
@@ -237,7 +248,7 @@ export async function startCoordServer(opts: CoordServerOptions = {}): Promise<{
     if (sessionId) {
       const transport = orchestratorSessions.get(sessionId)
       if (!transport) { res.status(404).json({ error: 'Session not found' }); return }
-      await transport.handleRequest(req, res, req.body)
+      await transport.handleRequest(req, res)
       return
     }
 
@@ -246,18 +257,20 @@ export async function startCoordServer(opts: CoordServerOptions = {}): Promise<{
     const mcp = createOrchestratorMcp(db)
     await mcp.connect(transport)
     transport.onclose = () => { if (transport.sessionId) orchestratorSessions.delete(transport.sessionId) }
-    await transport.handleRequest(req, res, req.body)
+    await transport.handleRequest(req, res)
     if (transport.sessionId) orchestratorSessions.set(transport.sessionId, transport)
   })
 
-  // Worker endpoint — same pattern.
-  app.all('/worker', bearerAuth, async (req, res) => {
+  // Worker endpoint — no auth required. Workers are subprocesses spawned on
+  // localhost by the CLI; they can't do OAuth in headless mode (no browser/TTY).
+  // The orchestrator endpoint keeps auth since it's used by user-facing sessions.
+  app.all('/worker', async (req, res) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined
 
     if (sessionId) {
       const transport = workerSessions.get(sessionId)
       if (!transport) { res.status(404).json({ error: 'Session not found' }); return }
-      await transport.handleRequest(req, res, req.body)
+      await transport.handleRequest(req, res)
       return
     }
 
@@ -265,7 +278,7 @@ export async function startCoordServer(opts: CoordServerOptions = {}): Promise<{
     const mcp = createWorkerMcp(db)
     await mcp.connect(transport)
     transport.onclose = () => { if (transport.sessionId) workerSessions.delete(transport.sessionId) }
-    await transport.handleRequest(req, res, req.body)
+    await transport.handleRequest(req, res)
     if (transport.sessionId) workerSessions.set(transport.sessionId, transport)
   })
 

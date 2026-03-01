@@ -3,10 +3,13 @@ import { buildWorkerMcpConfig, buildWorkerArgs, buildWorkerEnv, writeWorkerMcpCo
 import type { SpawnConfig } from '../../src/spawner/index.js'
 
 describe('spawner', () => {
-  it('buildWorkerMcpConfig includes the coord server', () => {
+  it('buildWorkerMcpConfig uses multiclaude-worker (not coord) to avoid naming conflict', () => {
     const config = buildWorkerMcpConfig({ serverPort: 7432 })
-    expect(config.mcpServers).toHaveProperty('multiclaude-coord')
-    expect(config.mcpServers['multiclaude-coord'].url).toContain('7432')
+    expect(config.mcpServers).toHaveProperty('multiclaude-worker')
+    expect(config.mcpServers['multiclaude-worker'].url).toContain('7432')
+    expect(config.mcpServers['multiclaude-worker'].url).toContain('/worker')
+    // Should NOT use 'multiclaude-coord' — that name is reserved for the orchestrator endpoint
+    expect(config.mcpServers).not.toHaveProperty('multiclaude-coord')
   })
 
   it('buildWorkerArgs includes --mcp-config flag', () => {
@@ -52,5 +55,14 @@ describe('spawner', () => {
   it('buildWorkerEnv sets MULTICLAUDE_AGENT_ID', () => {
     const env = buildWorkerEnv('w-task-1')
     expect(env['MULTICLAUDE_AGENT_ID']).toBe('w-task-1')
+  })
+
+  it('buildWorkerEnv removes CLAUDECODE to prevent nested session error', () => {
+    const orig = process.env['CLAUDECODE']
+    process.env['CLAUDECODE'] = '1'
+    const env = buildWorkerEnv('w-task-1')
+    expect(env['CLAUDECODE']).toBeUndefined()
+    if (orig === undefined) delete process.env['CLAUDECODE']
+    else process.env['CLAUDECODE'] = orig
   })
 })

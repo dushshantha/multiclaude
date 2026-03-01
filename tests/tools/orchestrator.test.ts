@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createDb, closeDb } from '../../src/server/state/db.js'
-import { handlePlanDag, handleGetSystemStatus, handleCancelTask, handleSpawnWorker } from '../../src/server/tools/orchestrator.js'
+import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker } from '../../src/server/tools/orchestrator.js'
 import { addEdge } from '../../src/server/state/dag.js'
 import type Database from 'better-sqlite3'
 
@@ -68,5 +68,32 @@ describe('orchestrator tools', () => {
     addEdge(db, 'blocker', 'dependent')
     const result = handleSpawnWorker(db, 'dependent', 'w-dep')
     expect(result.ok).toBe(true)
+  })
+
+  it('wait_for_event returns immediately when status changes during wait', async () => {
+    db.prepare("INSERT INTO tasks (id, title, status) VALUES ('t1', 'Task', 'pending')").run()
+
+    // Change the status after 200ms
+    setTimeout(() => {
+      db.prepare("UPDATE tasks SET status = 'done' WHERE id = 't1'").run()
+    }, 200)
+
+    const start = Date.now()
+    const result = await handleWaitForEvent(db, 5)
+    const elapsed = Date.now() - start
+
+    expect(elapsed).toBeLessThan(2000) // resolved well before 5s timeout
+    expect(result.tasks[0].status).toBe('done')
+  })
+
+  it('wait_for_event returns after timeout when nothing changes', async () => {
+    db.prepare("INSERT INTO tasks (id, title, status) VALUES ('t1', 'Task', 'pending')").run()
+
+    const start = Date.now()
+    await handleWaitForEvent(db, 2) // 2-second timeout
+    const elapsed = Date.now() - start
+
+    expect(elapsed).toBeGreaterThanOrEqual(2000)
+    expect(elapsed).toBeLessThan(4000)
   })
 })
