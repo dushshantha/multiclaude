@@ -26,6 +26,10 @@ You (natural language)
 
 The orchestrator has MCP tools to plan a DAG (`plan_dag`), register workers (`spawn_worker`), monitor status (`get_system_status`), and cancel tasks (`cancel_task`). Worker agents have tools to get their assignment (`get_my_task`), report progress (`report_progress`), and signal completion or failure (`report_done`, `report_blocked`).
 
+### Planning Loop
+
+Before any workers are spawned, the orchestrator runs a planning loop. After calling `plan_dag`, it displays an ASCII DAG visualization of all tasks and their dependencies, then uses `AskUserQuestion` to ask the user to **Proceed** or **Revise**. If the user chooses Revise, they can describe changes (add tasks, remove tasks, adjust dependencies), and the orchestrator calls `plan_dag` again with the updated task list, displays the new visualization, and asks for approval again. Only once the user explicitly approves does the orchestrator begin spawning workers.
+
 ## Prerequisites
 
 - Node.js 18+
@@ -38,12 +42,13 @@ The orchestrator has MCP tools to plan a DAG (`plan_dag`), register workers (`sp
 git clone https://github.com/dushshantha/multiclaude.git
 cd multiclaude
 npm install
+npm link
 ```
 
 ## Run
 
 ```bash
-npm start
+multiclaude start
 ```
 
 This starts:
@@ -53,21 +58,24 @@ This starts:
 
 Optional flags:
 ```bash
-npm start -- --no-tui          # skip terminal UI
-npm start -- --no-web          # skip web dashboard
-npm start -- --coord-port=8000 # custom coord server port
-npm start -- --web-port=8001   # custom web dashboard port
+multiclaude start --no-tui          # skip terminal UI
+multiclaude start --no-web          # skip web dashboard
+multiclaude start --coord-port=8000 # custom coord server port
+multiclaude start --web-port=8001   # custom web dashboard port
 ```
 
 ## Connect the Orchestrator
 
-Once the server is running, launch Claude Code with the orchestrator MCP config:
+In the project directory you want to work on, run `multiclaude init` to set it up. Then launch Claude Code:
 
 ```bash
-claude --mcp-config ~/.claude/multiclaude-orchestrator-mcp.json
+multiclaude init
+claude
 ```
 
-Claude Code will automatically complete an OAuth flow (first time only) and connect to the coordination server. You should see the `multiclaude-coord` MCP server listed as connected in `/mcp`.
+Claude Code will automatically connect to the coordination server. You should see the `multiclaude-coord` MCP server listed as connected in `/mcp`.
+
+If the `multiclaude-coord` server shows as unauthenticated in `/mcp`, run `/mcp` and select the server to complete the OAuth flow.
 
 > **Note:** Ports 7432 (coord) and 7433 (web) are reserved for MultiClaude. Don't kill processes on these ports during agent tasks.
 
@@ -114,6 +122,19 @@ I want to build a small CLI tool that converts JSON to CSV. Please:
 4. Monitor with get_system_status and dispatch the next tasks as they complete
 ```
 
+### 6. Try the planning loop
+```
+Use plan_dag to break this feature into tasks:
+- Add a user login endpoint
+- Add a user logout endpoint
+- Add session middleware (depends on login and logout)
+- Write integration tests (depends on session middleware)
+
+Show me the ASCII DAG visualization, then I'll tell you whether to proceed or revise.
+```
+The orchestrator will display the task graph and ask: **"Does this plan look good? Proceed / Revise"**
+If you choose Revise, describe what to change (e.g. "split the middleware task into two") and the orchestrator will regenerate the DAG and ask again. Once you choose Proceed, workers are spawned immediately.
+
 ## Run Tests
 
 ```bash
@@ -147,6 +168,12 @@ prompts/
   orchestrator.md         # System prompt for the orchestrator Claude Code instance
   worker.md               # System prompt for worker Claude Code instances
 tests/                    # Vitest test suite
+agent-observability/      # Agent observability sub-project
+  mcp-collector/          # MCP collection server (captures tool calls and agent events)
+  db/                     # PostgreSQL schema and migrations
+  attribution/            # Attribution engine (links outcomes back to agent actions)
+  api/                    # Analytics API (query agent activity, costs, outcomes)
+  dashboard/              # Next.js dashboard (visualize agent runs, token usage, task traces)
 ```
 
 ## Architecture Notes
