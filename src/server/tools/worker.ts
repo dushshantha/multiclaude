@@ -29,10 +29,20 @@ export function handleReportProgress(
 export function handleReportDone(
   db: Database.Database,
   taskId: string,
-  summary: string
+  summary: string,
+  opts: { input_tokens?: number; output_tokens?: number; total_tokens?: number; duration_seconds?: number } = {}
 ): void {
   const task = getTask(db, taskId)
-  updateTask(db, taskId, { status: 'done' })
+  const duration_seconds = opts.duration_seconds ?? (task?.started_at
+    ? (Date.now() - new Date(task.started_at).getTime()) / 1000
+    : undefined)
+  updateTask(db, taskId, {
+    status: 'done',
+    duration_seconds,
+    input_tokens: opts.input_tokens,
+    output_tokens: opts.output_tokens,
+    total_tokens: opts.total_tokens,
+  })
   db.prepare(
     'INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)'
   ).run(taskId, 'info', `DONE: ${summary}`)

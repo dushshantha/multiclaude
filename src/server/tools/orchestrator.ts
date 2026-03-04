@@ -148,6 +148,6 @@ export function handleSpawnWorker(
   }
 
   registerAgent(db, { id: agentId, task_id: taskId, pid: opts.pid, cwd: opts.cwd })
-  updateTask(db, taskId, { status: 'in_progress', agent_id: agentId })
+  updateTask(db, taskId, { status: 'in_progress', agent_id: agentId, started_at: new Date().toISOString() })
   return { ok: true }
 }

@@ -28,6 +28,22 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: 'gray',
 }
 
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${Math.floor(seconds)}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m${Math.floor(seconds % 60)}s`
+  return `${Math.floor(seconds / 3600)}h${Math.floor((seconds % 3600) / 60)}m`
+}
+
+function formatTokens(n: number): string {
+  if (n < 1000) return `${n}`
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`
+  return `${(n / 1_000_000).toFixed(1)}M`
+}
+
+function getElapsedSeconds(startedAt: string): number {
+  return (Date.now() - new Date(startedAt + 'Z').getTime()) / 1000
+}
+
 // Query the most recent log message per task in a single pass.
 const LATEST_LOG_SQL = `
   SELECT task_id, message, level
@@ -66,6 +82,7 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
   const running = tasks.filter(t => t.status === 'in_progress').length
   const done = tasks.filter(t => t.status === 'done').length
   const failed = tasks.filter(t => t.status === 'failed').length
+  const totalTokens = tasks.reduce((sum, t) => sum + (t.total_tokens ?? 0), 0)
 
   return (
     <Box flexDirection="column" padding={1}>
@@ -74,25 +91,40 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
         <Text color="blue">■ {running} running  </Text>
         <Text color="green">✓ {done} done  </Text>
         {failed > 0 && <Text color="red">✗ {failed} failed  </Text>}
+        {totalTokens > 0 && <Text dimColor>~{formatTokens(totalTokens)} tokens  </Text>}
         <Text dimColor>[q]uit  [w] web logs</Text>
       </Box>
 
       <Box flexDirection="column" marginBottom={1}>
-        <Text bold dimColor>{'TASK'.padEnd(30)} {'STATUS'.padEnd(15)} AGENT</Text>
+        <Text bold dimColor>{'TASK'.padEnd(28)} {'STATUS'.padEnd(12)} {'TIME'.padEnd(8)} {'TOKENS'.padEnd(8)} AGENT</Text>
         {tasks.map(t => {
           const icon = STATUS_ICONS[t.status] ?? '?'
           const color = STATUS_COLORS[t.status] ?? 'white'
           const log = latestLogs.get(t.id)
           const logMsg = log?.message?.replace(/\n/g, ' ').slice(0, 55)
+
+          let timeStr = '--'
+          if (t.status === 'in_progress' && t.started_at) {
+            timeStr = formatDuration(getElapsedSeconds(t.started_at))
+          } else if (t.duration_seconds != null) {
+            timeStr = formatDuration(t.duration_seconds)
+          }
+
+          const tokenStr = t.total_tokens != null ? formatTokens(t.total_tokens) : '--'
+
           return (
             <Box key={t.id} flexDirection="column">
               <Box>
                 <Text color={color}>
-                  {icon} {t.title.slice(0, 28).padEnd(29)}{' '}
+                  {icon} {t.title.slice(0, 26).padEnd(27)}{' '}
                 </Text>
                 <Text color={color}>
-                  {t.status.padEnd(14)}{' '}
+                  {t.status.padEnd(12)}{' '}
                 </Text>
+                <Text color={t.status === 'in_progress' ? 'yellow' : color}>
+                  {timeStr.padEnd(8)}{' '}
+                </Text>
+                <Text dimColor>{tokenStr.padEnd(8)}{' '}</Text>
                 <Text dimColor>{t.agent_id ?? '-'}</Text>
                 {t.retry_count > 0 && (
                   <Text color="yellow">  ⚠ retry {t.retry_count}/{t.max_retries}</Text>
