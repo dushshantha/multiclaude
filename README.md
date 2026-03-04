@@ -42,12 +42,13 @@ Before any workers are spawned, the orchestrator runs a planning loop. After cal
 git clone https://github.com/dushshantha/multiclaude.git
 cd multiclaude
 npm install
+npm link
 ```
 
 ## Run
 
 ```bash
-npm start
+multiclaude start
 ```
 
 This starts:
@@ -57,21 +58,24 @@ This starts:
 
 Optional flags:
 ```bash
-npm start -- --no-tui          # skip terminal UI
-npm start -- --no-web          # skip web dashboard
-npm start -- --coord-port=8000 # custom coord server port
-npm start -- --web-port=8001   # custom web dashboard port
+multiclaude start --no-tui          # skip terminal UI
+multiclaude start --no-web          # skip web dashboard
+multiclaude start --coord-port=8000 # custom coord server port
+multiclaude start --web-port=8001   # custom web dashboard port
 ```
 
 ## Connect the Orchestrator
 
-Once the server is running, launch Claude Code with the orchestrator MCP config:
+In the project directory you want to work on, run `multiclaude init` to set it up. Then launch Claude Code:
 
 ```bash
-claude --mcp-config ~/.claude/multiclaude-orchestrator-mcp.json
+multiclaude init
+claude
 ```
 
-Claude Code will automatically complete an OAuth flow (first time only) and connect to the coordination server. You should see the `multiclaude-coord` MCP server listed as connected in `/mcp`.
+Claude Code will automatically connect to the coordination server. You should see the `multiclaude-coord` MCP server listed as connected in `/mcp`.
+
+If the `multiclaude-coord` server shows as unauthenticated in `/mcp`, run `/mcp` and select the server to complete the OAuth flow.
 
 > **Note:** Ports 7432 (coord) and 7433 (web) are reserved for MultiClaude. Don't kill processes on these ports during agent tasks.
 
