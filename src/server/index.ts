@@ -105,8 +105,8 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
       })
     },
     async ({ epic }) => {
-      handlePlanDag(db, epic)
-      return { content: [{ type: 'text' as const, text: 'DAG created successfully' }] }
+      const visualization = handlePlanDag(db, epic)
+      return { content: [{ type: 'text' as const, text: visualization }] }
     }
   )
 
