@@ -1,3 +1,4 @@
+import { currentUser } from "@clerk/nextjs/server";
 import { RoiPanel } from "../../components/RoiPanel";
 import { WastePanel } from "../../components/WastePanel";
 
@@ -21,6 +22,7 @@ async function fetchMetrics(orgId: string): Promise<OrgMetrics> {
 }
 
 export default async function DashboardPage() {
+  const user = await currentUser();
   let metrics: OrgMetrics = { costPerPr: 0, costPerTicket: 0, waste: 0 };
   let error: string | null = null;
 
@@ -37,7 +39,9 @@ export default async function DashboardPage() {
           Director Dashboard
         </h1>
         <p className="mb-8 text-gray-500">
-          ROI and waste overview for your AI development spend.
+          {user?.firstName
+            ? `Welcome, ${user.firstName}. ROI and waste overview for your AI development spend.`
+            : "ROI and waste overview for your AI development spend."}
         </p>
 
         {error && (
