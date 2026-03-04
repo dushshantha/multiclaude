@@ -14,7 +14,7 @@ export interface Epic {
   tasks: EpicTask[]
 }
 
-export function handlePlanDag(db: Database.Database, epic: Epic): void {
+export function handlePlanDag(db: Database.Database, epic: Epic): string {
   for (const t of epic.tasks) {
     createTask(db, { id: t.id, title: t.title, description: t.description })
   }
@@ -23,6 +23,53 @@ export function handlePlanDag(db: Database.Database, epic: Epic): void {
       addEdge(db, dep, t.id)
     }
   }
+  return buildDagVisualization(epic)
+}
+
+function buildDagVisualization(epic: Epic): string {
+  const taskMap = new Map(epic.tasks.map(t => [t.id, t]))
+  const depth = new Map<string, number>()
+
+  function getDepth(id: string): number {
+    if (depth.has(id)) return depth.get(id)!
+    const task = taskMap.get(id)
+    if (!task || task.dependsOn.length === 0) {
+      depth.set(id, 0)
+      return 0
+    }
+    const d = Math.max(...task.dependsOn.map(dep => getDepth(dep) + 1))
+    depth.set(id, d)
+    return d
+  }
+
+  for (const t of epic.tasks) getDepth(t.id)
+
+  const waves = new Map<number, EpicTask[]>()
+  for (const t of epic.tasks) {
+    const d = depth.get(t.id) ?? 0
+    if (!waves.has(d)) waves.set(d, [])
+    waves.get(d)!.push(t)
+  }
+
+  const numWaves = waves.size
+  const lines: string[] = [
+    `DAG Plan — ${epic.tasks.length} task${epic.tasks.length === 1 ? '' : 's'}, ${numWaves} wave${numWaves === 1 ? '' : 's'}`,
+    '',
+  ]
+
+  for (const [waveIdx, tasks] of [...waves.entries()].sort(([a], [b]) => a - b)) {
+    lines.push(`Wave ${waveIdx + 1}${waveIdx === 0 ? ' (runs immediately)' : ''}`)
+    for (const t of tasks) lines.push(`  [${t.id}] ${t.title}`)
+    lines.push('')
+  }
+
+  const edges = epic.tasks.flatMap(t => t.dependsOn.map(dep => `  ${dep} → ${t.id}`))
+  if (edges.length > 0) {
+    lines.push('Dependencies')
+    lines.push(...edges)
+  }
+
+  return lines.join('\n').trimEnd()
 }
 
 export function handleGetSystemStatus(db: Database.Database): {

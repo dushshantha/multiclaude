@@ -18,13 +18,23 @@ describe('orchestrator tools', () => {
         { id: 'c', title: 'OAuth Impl', dependsOn: ['a'] },
       ]
     }
-    handlePlanDag(db, epic)
+    const viz = handlePlanDag(db, epic)
     const tasks = db.prepare('SELECT * FROM tasks').all() as { id: string }[]
     expect(tasks).toHaveLength(3)
     const edges = db.prepare('SELECT * FROM dag_edges').all() as { from_task: string; to_task: string }[]
     expect(edges).toHaveLength(2)
     expect(edges.find(e => e.from_task === 'a' && e.to_task === 'b')).toBeTruthy()
     expect(edges.find(e => e.from_task === 'a' && e.to_task === 'c')).toBeTruthy()
+    // Visualization includes all task titles
+    expect(viz).toContain('API Contract')
+    expect(viz).toContain('JWT Impl')
+    expect(viz).toContain('OAuth Impl')
+    // Wave structure
+    expect(viz).toContain('Wave 1 (runs immediately)')
+    expect(viz).toContain('Wave 2')
+    // Dependency edges
+    expect(viz).toContain('a → b')
+    expect(viz).toContain('a → c')
   })
 
   it('get_system_status returns tasks, agents, and readyTasks', () => {
