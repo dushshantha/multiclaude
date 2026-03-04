@@ -193,9 +193,16 @@ function createWorkerMcp(db: Database.Database): McpServer {
   server.tool(
     'report_done',
     'Signal task completion',
-    { task_id: z.string(), summary: z.string() },
-    async ({ task_id, summary }) => {
-      handleReportDone(db, task_id, summary)
+    {
+      task_id: z.string(),
+      summary: z.string(),
+      input_tokens: z.number().optional(),
+      output_tokens: z.number().optional(),
+      total_tokens: z.number().optional(),
+      duration_seconds: z.number().optional(),
+    },
+    async ({ task_id, summary, input_tokens, output_tokens, total_tokens, duration_seconds }) => {
+      handleReportDone(db, task_id, summary, { input_tokens, output_tokens, total_tokens, duration_seconds })
       return { content: [{ type: 'text' as const, text: 'Task marked as done' }] }
     }
   )

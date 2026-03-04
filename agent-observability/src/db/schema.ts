@@ -1,4 +1,4 @@
-import { pgTable, text, uuid, timestamp, numeric, integer } from 'drizzle-orm/pg-core'
+import { pgTable, text, uuid, timestamp, numeric, integer, unique } from 'drizzle-orm/pg-core'
 
 export const orgs = pgTable('orgs', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -13,7 +13,9 @@ export const developers = pgTable('developers', {
   email: text('email').notNull(),
   name: text('name'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-})
+}, (table) => ({
+  uniqueOrgEmail: unique('developers_org_email_unique').on(table.orgId, table.email),
+}))
 
 export const sessions = pgTable('sessions', {
   id: uuid('id').primaryKey().defaultRandom(),

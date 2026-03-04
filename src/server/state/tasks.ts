@@ -12,6 +12,11 @@ export interface Task {
   worktree_path: string | null
   branch: string | null
   agent_id: string | null
+  started_at: string | null
+  duration_seconds: number | null
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
   created_at: string
   updated_at: string
 }
@@ -29,6 +34,11 @@ export interface UpdateTaskInput {
   worktree_path?: string
   branch?: string
   agent_id?: string
+  started_at?: string
+  duration_seconds?: number
+  input_tokens?: number
+  output_tokens?: number
+  total_tokens?: number
 }
 
 export function createTask(db: Database.Database, input: CreateTaskInput): void {
@@ -56,6 +66,11 @@ export function updateTask(db: Database.Database, id: string, input: UpdateTaskI
   if (input.worktree_path !== undefined) { sets.push('worktree_path = @worktree_path'); params.worktree_path = input.worktree_path }
   if (input.branch !== undefined) { sets.push('branch = @branch'); params.branch = input.branch }
   if (input.agent_id !== undefined) { sets.push('agent_id = @agent_id'); params.agent_id = input.agent_id }
+  if (input.started_at !== undefined) { sets.push('started_at = @started_at'); params.started_at = input.started_at }
+  if (input.duration_seconds !== undefined) { sets.push('duration_seconds = @duration_seconds'); params.duration_seconds = input.duration_seconds }
+  if (input.input_tokens !== undefined) { sets.push('input_tokens = @input_tokens'); params.input_tokens = input.input_tokens }
+  if (input.output_tokens !== undefined) { sets.push('output_tokens = @output_tokens'); params.output_tokens = input.output_tokens }
+  if (input.total_tokens !== undefined) { sets.push('total_tokens = @total_tokens'); params.total_tokens = input.total_tokens }
 
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = @id`).run(params as any)
 }

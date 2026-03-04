@@ -71,4 +71,20 @@ describe('worker tools', () => {
     const agent = db.prepare("SELECT status FROM agents WHERE id = 'w-1'").get() as { status: string }
     expect(agent.status).toBe('done')
   })
+
+  it('report_done stores token counts when provided', () => {
+    handleReportDone(db, 'task-1', 'done', { input_tokens: 1000, output_tokens: 500, total_tokens: 1500 })
+    const task = db.prepare("SELECT input_tokens, output_tokens, total_tokens FROM tasks WHERE id = 'task-1'").get() as {
+      input_tokens: number; output_tokens: number; total_tokens: number
+    }
+    expect(task.input_tokens).toBe(1000)
+    expect(task.output_tokens).toBe(500)
+    expect(task.total_tokens).toBe(1500)
+  })
+
+  it('report_done accepts explicit duration_seconds override', () => {
+    handleReportDone(db, 'task-1', 'done', { duration_seconds: 42.5 })
+    const task = db.prepare("SELECT duration_seconds FROM tasks WHERE id = 'task-1'").get() as { duration_seconds: number }
+    expect(task.duration_seconds).toBe(42.5)
+  })
 })

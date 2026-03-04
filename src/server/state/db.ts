@@ -14,6 +14,11 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
       worktree_path TEXT,
       branch TEXT,
       agent_id TEXT,
+      started_at TEXT,
+      duration_seconds REAL,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      total_tokens INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -44,6 +49,11 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
   `)
   // Migrations: add columns that may be missing in older DBs
   try { db.exec("ALTER TABLE agents ADD COLUMN cwd TEXT") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN started_at TEXT") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN duration_seconds REAL") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN input_tokens INTEGER") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN output_tokens INTEGER") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN total_tokens INTEGER") } catch { /* already exists */ }
   return db
 }
 
