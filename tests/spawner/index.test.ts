@@ -26,6 +26,21 @@ describe('spawner', () => {
     expect(args).toContain('/tmp/mc-worker-config.json')
   })
 
+  it('buildWorkerArgs includes --print --verbose --output-format stream-json for token tracking', () => {
+    const cfg: SpawnConfig = {
+      taskId: 'task-1',
+      taskTitle: 'Build JWT auth',
+      agentId: 'w-task-1',
+      worktreePath: '/tmp/mc-task-1',
+      mcpConfigPath: '/tmp/mc-worker-config.json',
+    }
+    const args = buildWorkerArgs(cfg)
+    expect(args).toContain('--print')
+    expect(args).toContain('--verbose')
+    expect(args).toContain('--output-format')
+    expect(args[args.indexOf('--output-format') + 1]).toBe('stream-json')
+  })
+
   it('buildWorkerArgs prompt includes task title', () => {
     const cfg: SpawnConfig = {
       taskId: 'task-1',

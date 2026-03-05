@@ -52,6 +52,9 @@ export function buildWorkerArgs(cfg: SpawnConfig): string[] {
   return [
     '--mcp-config', cfg.mcpConfigPath,
     '--dangerously-skip-permissions',
+    '--print',
+    '--verbose',
+    '--output-format', 'stream-json',
     prompt,
   ]
 }
