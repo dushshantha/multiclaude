@@ -2,8 +2,8 @@
 import { startCoordServer } from './server/index.js'
 import { startWebServer } from './web/server.js'
 import { startTui } from './tui/index.js'
-import { spawnWorker, writeWorkerMcpConfig } from './spawner/index.js'
-import { getTask } from './server/state/tasks.js'
+import { spawnWorker, writeWorkerMcpConfig, workerLogPath } from './spawner/index.js'
+import { getTask, updateTask } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
@@ -17,6 +17,24 @@ interface AgentRow {
   cwd: string | null
   pid: number | null
   status: string
+}
+
+function parseTokensFromLog(logPath: string): { input_tokens?: number; output_tokens?: number; total_tokens?: number } {
+  try {
+    const lines = readFileSync(logPath, 'utf8').trim().split('\n').reverse()
+    for (const line of lines) {
+      try {
+        const msg = JSON.parse(line)
+        if (msg.type === 'result' && msg.usage) {
+          const input_tokens: number | undefined = msg.usage.input_tokens
+          const output_tokens: number | undefined = msg.usage.output_tokens
+          const total_tokens = (input_tokens ?? 0) + (output_tokens ?? 0) || undefined
+          return { input_tokens, output_tokens, total_tokens }
+        }
+      } catch { /* not JSON */ }
+    }
+  } catch { /* file not found or unreadable */ }
+  return {}
 }
 
 function startSpawnerWatcher(db: Database.Database, mcpConfigPath: string): void {
@@ -69,6 +87,13 @@ function startSpawnerWatcher(db: Database.Database, mcpConfigPath: string): void
         ).get(agent.id) as { status: string } | undefined
         if (current?.status === 'running' || current?.status === 'spawning') {
           updateAgent(db, agent.id, { status: 'failed' })
+        }
+        // Parse token usage from the worker log and store it on the task
+        if (agent.task_id) {
+          const tokens = parseTokensFromLog(workerLogPath(agent.id))
+          if (tokens.total_tokens !== undefined) {
+            updateTask(db, agent.task_id, tokens)
+          }
         }
       })
     }

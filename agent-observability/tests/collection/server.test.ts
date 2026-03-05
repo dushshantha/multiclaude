@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import type { Server } from 'node:http'
 import { createCollectionServer, createLocalhostOAuthProvider } from '../../src/collection/server.js'
+import { orgs as orgsTable } from '../../src/db/schema.js'
 
 const mockOrg = { id: 'org-1', slug: 'acme', name: 'Acme', createdAt: new Date() }
 const mockDeveloper = { id: 'dev-1', orgId: 'org-1', email: 'alice@example.com', name: 'Alice', createdAt: new Date() }
@@ -14,9 +15,14 @@ function makeMockDb(orgFound = true, developerFound = false) {
       }),
     }),
     update: () => ({ set: () => ({ where: () => ({ returning: async () => [mockSession] }) }) }),
+    // Differentiate org vs developer queries by the table passed to .from()
     select: () => ({
-      from: () => ({
-        where: async () => (developerFound ? [mockDeveloper] : []),
+      from: (table: unknown) => ({
+        where: async () => {
+          if (table === orgsTable) return orgFound ? [mockOrg] : []
+          // developer table query
+          return developerFound ? [mockDeveloper] : []
+        },
       }),
     }),
     query: {
