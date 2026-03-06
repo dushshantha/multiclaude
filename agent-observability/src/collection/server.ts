@@ -448,7 +448,7 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
       return
     }
 
-    await transport.handleRequest(req, res, req.body)
+    await transport.handleRequest(req, res)
   })
 
   const server = createServer(app)
