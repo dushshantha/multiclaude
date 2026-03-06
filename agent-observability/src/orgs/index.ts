@@ -18,3 +18,7 @@ export async function getOrgBySlug(db: Db, slug: string): Promise<Org | null> {
   const rows = await db.select().from(orgs).where(eq(orgs.slug, slug))
   return rows[0] ?? null
 }
+
+export async function listOrgs(db: Db): Promise<Org[]> {
+  return db.select().from(orgs)
+}
