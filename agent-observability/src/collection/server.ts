@@ -20,7 +20,7 @@ import { upsertDeveloper } from '../developers/index.js'
 /**
  * Verifies a bearer token and returns org context, or null if invalid/expired.
  */
-async function verifyToken(db: Db, token: string): Promise<{ orgId: string; orgSlug: string; developerId?: string } | null> {
+export async function verifyToken(db: Db, token: string): Promise<{ orgId: string; orgSlug: string; developerId?: string } | null> {
   const now = new Date()
   const rows = await db
     .select({ orgId: tokens.orgId, developerId: tokens.developerId, expiresAt: tokens.expiresAt })
@@ -40,7 +40,7 @@ async function verifyToken(db: Db, token: string): Promise<{ orgId: string; orgS
 /**
  * Issues a new bearer token for an org/developer and persists it in the DB.
  */
-async function issueToken(db: Db, orgSlug: string, email?: string, name?: string): Promise<string> {
+export async function issueToken(db: Db, orgSlug: string, email?: string, name?: string): Promise<string> {
   const org = await getOrgBySlug(db, orgSlug)
   if (!org) throw new Error(`Org not found: ${orgSlug}`)
   let developerId: string | undefined
