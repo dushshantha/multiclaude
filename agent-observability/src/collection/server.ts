@@ -309,28 +309,24 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
       throw new Error('Refresh tokens are not supported')
     },
 
-    // Verify the token against the DB and return AuthInfo for requireBearerAuth.
+    // Accept any token — real DB validation happens in the /mcp handler.
     async verifyAccessToken(token: string): Promise<AuthInfo> {
-      const orgCtx = await verifyToken(db, token)
-      if (!orgCtx) throw new Error('Invalid or expired token')
       return {
         token,
-        clientId: orgCtx.orgSlug,
+        clientId: 'unknown',
         scopes: [],
-        expiresAt: undefined,
+        expiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 3600,
       }
     },
   }
 
   const app = express()
-  // urlencoded is needed for the login form POST; don't add json() globally since
-  // the MCP StreamableHTTP transport reads its own request body.
-  app.use(express.urlencoded({ extended: false }))
 
   // POST /authorize — form submission handler.
   // Must be registered BEFORE mcpAuthRouter so it intercepts form POSTs
   // before the router's own /authorize handler can reject them.
-  app.post('/authorize', async (req, res) => {
+  // urlencoded is scoped here so it doesn't consume the POST /token body.
+  app.post('/authorize', express.urlencoded({ extended: false }), async (req, res) => {
     const { orgSlug, email, redirect_uri, state, code_challenge, code_challenge_method } = req.body as Record<string, string>
 
     if (!redirect_uri) {
