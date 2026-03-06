@@ -184,6 +184,10 @@ export function createOrgMcp(db: Db, orgId: string, developerId?: string): McpSe
   return mcp
 }
 
+// Default bearer token used in the OAuth flow for local development.
+// This token must exist in the database (seeded during setup).
+const DEFAULT_BEARER_TOKEN = process.env.MCP_DEFAULT_TOKEN ?? '34ed3214-578d-4ea7-982b-3e1515310bb5'
+
 /**
  * Creates a multi-tenant Express server that handles MCP connections via StreamableHTTP.
  * Each request is authenticated via a bearer token that maps to an org.
@@ -193,6 +197,78 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
   const oauthProvider = createLocalhostOAuthProvider(db)
   const app = express()
   app.use(express.json())
+
+  // In-memory stores for the OAuth flow (single-server, local dev only)
+  const authCodes = new Map<string, string>()    // code -> bearer token
+  const oauthClients = new Map<string, object>() // client_id -> client metadata
+
+  // GET /.well-known/oauth-authorization-server — OAuth 2.0 Authorization Server Metadata (RFC 8414)
+  app.get('/.well-known/oauth-authorization-server', (req, res) => {
+    const base = `http://${req.headers.host}`
+    res.json({
+      issuer: base,
+      authorization_endpoint: `${base}/authorize`,
+      token_endpoint: `${base}/token`,
+      registration_endpoint: `${base}/register`,
+      response_types_supported: ['code'],
+      grant_types_supported: ['authorization_code'],
+      code_challenge_methods_supported: ['S256'],
+      token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
+    })
+  })
+
+  // POST /register — dynamic client registration (RFC 7591)
+  // Accepts any client metadata and returns a client_id. Stored in memory only.
+  app.post('/register', (req, res) => {
+    const clientId = randomUUID()
+    const client = { ...req.body, client_id: clientId }
+    oauthClients.set(clientId, client)
+    res.status(201).json(client)
+  })
+
+  // GET /authorize — authorization endpoint
+  // Issues an auth code that maps to DEFAULT_BEARER_TOKEN and redirects to redirect_uri.
+  app.get('/authorize', (req, res) => {
+    const redirect_uri = req.query['redirect_uri'] as string | undefined
+    const state = req.query['state'] as string | undefined
+
+    if (!redirect_uri) {
+      res.status(400).json({ error: 'invalid_request', error_description: 'redirect_uri is required' })
+      return
+    }
+
+    const code = randomUUID()
+    authCodes.set(code, DEFAULT_BEARER_TOKEN)
+
+    const redirectUrl = new URL(redirect_uri)
+    redirectUrl.searchParams.set('code', code)
+    if (state) redirectUrl.searchParams.set('state', state)
+
+    res.redirect(redirectUrl.toString())
+  })
+
+  // POST /token — token endpoint
+  // Exchanges an authorization code for the bearer token.
+  app.post('/token', express.urlencoded({ extended: false }), (req, res) => {
+    // Accept both JSON and form-encoded bodies (the middleware above handles urlencoded)
+    const body = req.body as Record<string, string>
+    const { grant_type, code } = body
+
+    if (grant_type !== 'authorization_code') {
+      res.status(400).json({ error: 'unsupported_grant_type', error_description: 'Only authorization_code is supported' })
+      return
+    }
+
+    if (!code || !authCodes.has(code)) {
+      res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' })
+      return
+    }
+
+    const token = authCodes.get(code)!
+    authCodes.delete(code)
+
+    res.json({ access_token: token, token_type: 'Bearer' })
+  })
 
   // POST /auth/register — issue a token for a developer.
   // Body: { orgSlug: string, email: string, name?: string }
