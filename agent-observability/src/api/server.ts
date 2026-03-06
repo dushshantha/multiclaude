@@ -6,7 +6,7 @@ import { listSessions } from '../sessions/index.js'
 import { createOrg, listOrgs } from '../orgs/index.js'
 import { createLocalhostOAuthProvider } from '../collection/server.js'
 
-export async function buildApiServer(db: Db, collectionPort: number) {
+export async function buildApiServer(db: Db, collectionPort = 0) {
   const app = Fastify({ logger: false })
   const oauthProvider = createLocalhostOAuthProvider(db)
 
