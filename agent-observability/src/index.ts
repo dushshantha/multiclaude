@@ -11,10 +11,8 @@ if (!databaseUrl) {
 
 const db = createDb(databaseUrl)
 
-const [{ port: collectionPort }, apiApp] = await Promise.all([
-  createCollectionServer(db),
-  buildApiServer(db),
-])
+const { port: collectionPort } = await createCollectionServer(db)
+const apiApp = await buildApiServer(db, collectionPort)
 
 const API_PORT = Number(process.env.API_PORT ?? 3001)
 await apiApp.listen({ port: API_PORT, host: '127.0.0.1' })
