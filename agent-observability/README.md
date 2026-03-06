@@ -140,3 +140,53 @@ npm run dev
 ```
 
 The Next.js dashboard will be available at `http://localhost:3000`.
+
+## Docker / Local Setup
+
+Use Docker Compose to run PostgreSQL locally with no manual database install required.
+
+### Step-by-step
+
+1. **Start PostgreSQL**
+
+   ```bash
+   docker compose up -d
+   ```
+
+2. **Copy the example env file**
+
+   ```bash
+   cp .env.example .env
+   ```
+
+3. **Install dependencies**
+
+   ```bash
+   npm install
+   ```
+
+4. **Apply the database schema**
+
+   ```bash
+   npm run db:push
+   ```
+
+5. **Start the server**
+
+   ```bash
+   npm start
+   ```
+
+### Teardown
+
+Stop the container (data is preserved in the named volume):
+
+```bash
+docker compose down
+```
+
+Stop the container **and delete all data**:
+
+```bash
+docker compose down -v
+```
