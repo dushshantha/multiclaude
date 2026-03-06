@@ -459,13 +459,14 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
   })
 
   const server = createServer(app)
+  const port = parseInt(process.env.COLLECTION_PORT ?? '7433', 10)
 
   await new Promise<void>((resolve) => {
-    server.listen(0, '127.0.0.1', resolve)
+    server.listen(port, '127.0.0.1', resolve)
   })
 
   const addr = server.address()
-  const port = typeof addr === 'object' && addr ? addr.port : 0
+  const actualPort = typeof addr === 'object' && addr ? addr.port : port
 
-  return { server, port }
+  return { server, port: actualPort }
 }

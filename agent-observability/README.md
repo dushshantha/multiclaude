@@ -107,7 +107,14 @@ Create a `.env` file in `agent-observability/`:
 
 ```env
 DATABASE_URL=postgres://user:password@localhost:5432/agent_observability
+COLLECTION_PORT=7433
 ```
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | *(required)* | PostgreSQL connection string |
+| `COLLECTION_PORT` | `7433` | Port for the MCP collection server |
+| `API_PORT` | `3001` | Port for the analytics REST API |
 
 Apply the schema to your database:
 
@@ -121,7 +128,7 @@ npm run db:push
 npm start
 ```
 
-The collection server listens on a random port on `127.0.0.1`. The port is printed on startup.
+The collection server listens on `127.0.0.1:7433` by default (configurable via `COLLECTION_PORT`). The port is printed on startup.
 
 ### Start the analytics API
 
