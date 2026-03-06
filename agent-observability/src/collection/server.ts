@@ -253,7 +253,7 @@ function renderLoginForm(params: {
  */
 export async function createCollectionServer(db: Db): Promise<{ server: Server; port: number }> {
   const port = parseInt(process.env.COLLECTION_PORT ?? '7433', 10)
-  const issuerUrl = new URL(`http://localhost:${port}`)
+  const issuerUrl = new URL(`http://127.0.0.1:${port}`)
 
   // In-memory stores shared between the OAuth provider and the POST /authorize handler.
   const clients = new Map<string, OAuthClientInformationFull>()
