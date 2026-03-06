@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import express from 'express'
-import { eq } from 'drizzle-orm'
+import { eq, and, gt } from 'drizzle-orm'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { z } from 'zod'
@@ -184,9 +184,79 @@ export function createOrgMcp(db: Db, orgId: string, developerId?: string): McpSe
   return mcp
 }
 
-// Default bearer token used in the OAuth flow for local development.
-// This token must exist in the database (seeded during setup).
-const DEFAULT_BEARER_TOKEN = process.env.MCP_DEFAULT_TOKEN ?? '34ed3214-578d-4ea7-982b-3e1515310bb5'
+function renderLoginForm(params: {
+  redirect_uri: string
+  state?: string
+  code_challenge?: string
+  code_challenge_method?: string
+  error?: string
+}): string {
+  const esc = (v: string | undefined) => (v ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Authenticate</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f5f5f5;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+      padding: 2rem;
+      width: 100%; max-width: 360px;
+    }
+    h1 { font-size: 1.25rem; margin: 0 0 1.5rem; color: #111; }
+    .error {
+      background: #fef2f2; color: #b91c1c;
+      border: 1px solid #fecaca; border-radius: 4px;
+      padding: 0.625rem 0.875rem;
+      margin-bottom: 1rem; font-size: 0.875rem;
+    }
+    label { display: block; font-size: 0.875rem; color: #374151; margin-bottom: 0.25rem; }
+    input[type="text"], input[type="email"] {
+      width: 100%; padding: 0.5rem 0.75rem;
+      border: 1px solid #d1d5db; border-radius: 4px;
+      font-size: 0.95rem; outline: none;
+      margin-bottom: 1rem;
+    }
+    input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.15); }
+    button {
+      width: 100%; padding: 0.625rem;
+      background: #6366f1; color: #fff;
+      border: none; border-radius: 4px;
+      font-size: 1rem; cursor: pointer;
+    }
+    button:hover { background: #4f46e5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Authenticate</h1>
+    ${params.error ? `<div class="error">${esc(params.error)}</div>` : ''}
+    <form method="POST" action="/authorize">
+      <input type="hidden" name="redirect_uri" value="${esc(params.redirect_uri)}" />
+      <input type="hidden" name="state" value="${esc(params.state)}" />
+      <input type="hidden" name="code_challenge" value="${esc(params.code_challenge)}" />
+      <input type="hidden" name="code_challenge_method" value="${esc(params.code_challenge_method)}" />
+      <label for="orgSlug">Org Slug</label>
+      <input type="text" id="orgSlug" name="orgSlug" placeholder="your-org" required />
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" placeholder="you@example.com" required />
+      <button type="submit">Authenticate</button>
+    </form>
+  </div>
+</body>
+</html>`
+}
 
 /**
  * Creates a multi-tenant Express server that handles MCP connections via StreamableHTTP.
@@ -197,6 +267,7 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
   const oauthProvider = createLocalhostOAuthProvider(db)
   const app = express()
   app.use(express.json())
+  app.use(express.urlencoded({ extended: false }))
 
   // In-memory stores for the OAuth flow (single-server, local dev only)
   const authCodes = new Map<string, string>()    // code -> bearer token
@@ -227,24 +298,71 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
   })
 
   // GET /authorize — authorization endpoint
-  // Issues an auth code that maps to DEFAULT_BEARER_TOKEN and redirects to redirect_uri.
+  // Serves an interactive login form asking for orgSlug and email.
   app.get('/authorize', (req, res) => {
     const redirect_uri = req.query['redirect_uri'] as string | undefined
     const state = req.query['state'] as string | undefined
+    const code_challenge = req.query['code_challenge'] as string | undefined
+    const code_challenge_method = req.query['code_challenge_method'] as string | undefined
 
     if (!redirect_uri) {
       res.status(400).json({ error: 'invalid_request', error_description: 'redirect_uri is required' })
       return
     }
 
-    const code = randomUUID()
-    authCodes.set(code, DEFAULT_BEARER_TOKEN)
+    res.send(renderLoginForm({ redirect_uri, state, code_challenge, code_challenge_method }))
+  })
 
-    const redirectUrl = new URL(redirect_uri)
-    redirectUrl.searchParams.set('code', code)
-    if (state) redirectUrl.searchParams.set('state', state)
+  // POST /authorize — handle login form submission
+  app.post('/authorize', async (req, res) => {
+    const { orgSlug, email, redirect_uri, state, code_challenge, code_challenge_method } = req.body as Record<string, string>
 
-    res.redirect(redirectUrl.toString())
+    if (!redirect_uri) {
+      res.status(400).json({ error: 'invalid_request', error_description: 'redirect_uri is required' })
+      return
+    }
+
+    if (!orgSlug || !email) {
+      res.send(renderLoginForm({ redirect_uri, state, code_challenge, code_challenge_method, error: 'Org Slug and Email are required.' }))
+      return
+    }
+
+    try {
+      // Look up the org to get its id
+      const org = await getOrgBySlug(db, orgSlug)
+      if (!org) {
+        res.send(renderLoginForm({ redirect_uri, state, code_challenge, code_challenge_method, error: `Org not found: ${orgSlug}` }))
+        return
+      }
+
+      // Upsert developer and look for an existing valid token
+      const developer = await upsertDeveloper(db, org.id, email)
+      const now = new Date()
+      const existingRows = await db
+        .select({ token: tokens.token })
+        .from(tokens)
+        .where(and(eq(tokens.developerId, developer.id), gt(tokens.expiresAt, now)))
+        .limit(1)
+
+      let token: string
+      if (existingRows.length > 0) {
+        token = existingRows[0].token
+      } else {
+        token = await oauthProvider.issueToken(orgSlug, email)
+      }
+
+      const code = randomUUID()
+      authCodes.set(code, token)
+
+      const redirectUrl = new URL(redirect_uri)
+      redirectUrl.searchParams.set('code', code)
+      if (state) redirectUrl.searchParams.set('state', state)
+
+      res.redirect(redirectUrl.toString())
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Authentication failed'
+      res.send(renderLoginForm({ redirect_uri, state, code_challenge, code_challenge_method, error: message }))
+    }
   })
 
   // POST /token — token endpoint
