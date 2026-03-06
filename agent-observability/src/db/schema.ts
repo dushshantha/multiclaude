@@ -57,3 +57,12 @@ export const wasteSessions = pgTable('waste_sessions', {
   costUsd: numeric('cost_usd', { precision: 10, scale: 6 }).notNull(),
   flaggedAt: timestamp('flagged_at').defaultNow().notNull(),
 })
+
+export const tokens = pgTable('tokens', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => orgs.id),
+  developerId: uuid('developer_id').references(() => developers.id),
+  token: text('token').notNull().unique(),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+})

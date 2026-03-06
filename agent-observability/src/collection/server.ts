@@ -1,19 +1,18 @@
 import { createServer, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import express from 'express'
+import { eq } from 'drizzle-orm'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { z } from 'zod'
 import type { Db } from '../db/index.js'
+import { tokens } from '../db/schema.js'
 import { createSession, updateSession } from '../sessions/index.js'
 import { getOrgBySlug } from '../orgs/index.js'
 import { upsertDeveloper } from '../developers/index.js'
 
-// In-memory token store: token -> { orgId, orgSlug, developerId?, expiresAt }
-const tokenStore = new Map<string, { orgId: string; orgSlug: string; developerId?: string; expiresAt: number }>()
-
 /**
- * Creates a simple localhost OAuth provider backed by an in-memory token store.
+ * Creates a simple localhost OAuth provider backed by a PostgreSQL tokens table.
  * Tokens are issued for org slugs and verified on each request.
  */
 export function createLocalhostOAuthProvider(db: Db) {
@@ -31,11 +30,12 @@ export function createLocalhostOAuthProvider(db: Db) {
         developerId = developer.id
       }
       const token = randomUUID()
-      tokenStore.set(token, {
+      const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 365) // 1 year
+      await db.insert(tokens).values({
         orgId: org.id,
-        orgSlug: org.slug,
-        developerId,
-        expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 365, // 1 year
+        developerId: developerId ?? null,
+        token,
+        expiresAt,
       })
       return token
     },
@@ -43,21 +43,28 @@ export function createLocalhostOAuthProvider(db: Db) {
     /**
      * Verifies a bearer token and returns org context (including developerId if present), or null if invalid.
      */
-    verifyToken(token: string): { orgId: string; orgSlug: string; developerId?: string } | null {
-      const entry = tokenStore.get(token)
-      if (!entry) return null
-      if (Date.now() > entry.expiresAt) {
-        tokenStore.delete(token)
+    async verifyToken(token: string): Promise<{ orgId: string; orgSlug: string; developerId?: string } | null> {
+      const now = new Date()
+      const rows = await db
+        .select({ orgId: tokens.orgId, developerId: tokens.developerId, expiresAt: tokens.expiresAt })
+        .from(tokens)
+        .where(eq(tokens.token, token))
+      const row = rows[0]
+      if (!row) return null
+      if (now > row.expiresAt) {
+        await db.delete(tokens).where(eq(tokens.token, token))
         return null
       }
-      return { orgId: entry.orgId, orgSlug: entry.orgSlug, developerId: entry.developerId }
+      const org = await db.query.orgs.findFirst({ where: (o, { eq: eqFn }) => eqFn(o.id, row.orgId) })
+      if (!org) return null
+      return { orgId: row.orgId, orgSlug: org.slug, developerId: row.developerId ?? undefined }
     },
 
     /**
      * Revokes a token.
      */
-    revokeToken(token: string): void {
-      tokenStore.delete(token)
+    async revokeToken(token: string): Promise<void> {
+      await db.delete(tokens).where(eq(tokens.token, token))
     },
   }
 }
@@ -202,8 +209,8 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
     }
     try {
       const token = await oauthProvider.issueToken(orgSlug, email, name ?? undefined)
-      const orgCtx = oauthProvider.verifyToken(token)!
-      res.json({ token, developerId: orgCtx.developerId })
+      const orgCtx = await oauthProvider.verifyToken(token)
+      res.json({ token, developerId: orgCtx?.developerId })
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error'
       res.status(400).json({ error: message })
@@ -217,7 +224,7 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
     // Extract bearer token for org resolution
     const authHeader = req.headers.authorization ?? ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
-    const orgCtx = oauthProvider.verifyToken(token)
+    const orgCtx = await oauthProvider.verifyToken(token)
 
     if (!orgCtx) {
       res.status(401).json({ error: 'Unauthorized: invalid or missing token' })
