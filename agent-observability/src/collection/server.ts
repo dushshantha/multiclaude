@@ -439,16 +439,16 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
 
       const mcp = createOrgMcp(db, orgCtx.orgId, orgCtx.developerId)
       await mcp.connect(transport)
-
-      if (transport.sessionId) {
-        transports.set(transport.sessionId, transport)
-      }
     } else {
       res.status(400).json({ error: 'Bad request: missing or invalid session' })
       return
     }
 
     await transport.handleRequest(req, res)
+
+    if (transport.sessionId && !transports.has(transport.sessionId)) {
+      transports.set(transport.sessionId, transport)
+    }
   })
 
   const server = createServer(app)
