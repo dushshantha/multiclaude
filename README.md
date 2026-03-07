@@ -168,13 +168,12 @@ prompts/
   orchestrator.md         # System prompt for the orchestrator Claude Code instance
   worker.md               # System prompt for worker Claude Code instances
 tests/                    # Vitest test suite
-agent-observability/      # Agent observability sub-project
-  mcp-collector/          # MCP collection server (captures tool calls and agent events)
-  db/                     # PostgreSQL schema and migrations
-  attribution/            # Attribution engine (links outcomes back to agent actions)
-  api/                    # Analytics API (query agent activity, costs, outcomes)
-  dashboard/              # Next.js dashboard (visualize agent runs, token usage, task traces)
 ```
+
+## Agent Observability
+
+The agent observability MCP server has been moved to its own repository:
+**[dushshantha/agent-observability](https://github.com/dushshantha/agent-observability)**
 
 ## Architecture Notes
 
