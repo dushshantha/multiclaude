@@ -4,11 +4,10 @@ import type { Db } from '../db/index.js'
 import { getOrgMetrics } from '../analytics/index.js'
 import { listSessions } from '../sessions/index.js'
 import { createOrg, listOrgs } from '../orgs/index.js'
-import { createLocalhostOAuthProvider } from '../collection/server.js'
+import { issueToken, verifyToken } from '../collection/server.js'
 
 export async function buildApiServer(db: Db, collectionPort = 0) {
   const app = Fastify({ logger: false })
-  const oauthProvider = createLocalhostOAuthProvider(db)
 
   await app.register(cors)
 
@@ -45,8 +44,8 @@ export async function buildApiServer(db: Db, collectionPort = 0) {
     if (!orgSlug) return reply.status(400).send({ error: 'orgSlug is required' })
     if (!email || !email.includes('@')) return reply.status(400).send({ error: 'A valid email is required' })
     try {
-      const token = await oauthProvider.issueToken(orgSlug, email, name)
-      const orgCtx = await oauthProvider.verifyToken(token)
+      const token = await issueToken(db, orgSlug, email, name)
+      const orgCtx = await verifyToken(db, token)
       return { token, developerId: orgCtx?.developerId }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error'

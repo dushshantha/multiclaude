@@ -4,6 +4,12 @@ import express from 'express'
 import { eq, and, gt } from 'drizzle-orm'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
+import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js'
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js'
+import type { OAuthServerProvider } from '@modelcontextprotocol/sdk/server/auth/provider.js'
+import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js'
+import type { OAuthClientInformationFull, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js'
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js'
 import { z } from 'zod'
 import type { Db } from '../db/index.js'
 import { tokens } from '../db/schema.js'
@@ -12,64 +18,46 @@ import { getOrgBySlug } from '../orgs/index.js'
 import { upsertDeveloper } from '../developers/index.js'
 
 /**
- * Creates a simple localhost OAuth provider backed by a PostgreSQL tokens table.
- * Tokens are issued for org slugs and verified on each request.
+ * Verifies a bearer token and returns org context, or null if invalid/expired.
  */
-export function createLocalhostOAuthProvider(db: Db) {
-  return {
-    /**
-     * Issues a token for the given org slug and optional user email.
-     * If email is provided, upserts the developer record and ties the token to that developer.
-     */
-    async issueToken(orgSlug: string, email?: string, name?: string): Promise<string> {
-      const org = await getOrgBySlug(db, orgSlug)
-      if (!org) throw new Error(`Org not found: ${orgSlug}`)
-      let developerId: string | undefined
-      if (email) {
-        const developer = await upsertDeveloper(db, org.id, email, name)
-        developerId = developer.id
-      }
-      const token = randomUUID()
-      const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 365) // 1 year
-      await db.insert(tokens).values({
-        orgId: org.id,
-        developerId: developerId ?? null,
-        token,
-        expiresAt,
-      })
-      return token
-    },
-
-    /**
-     * Verifies a bearer token and returns org context (including developerId if present), or null if invalid.
-     */
-    async verifyToken(token: string): Promise<{ orgId: string; orgSlug: string; developerId?: string } | null> {
-      const now = new Date()
-      const rows = await db
-        .select({ orgId: tokens.orgId, developerId: tokens.developerId, expiresAt: tokens.expiresAt })
-        .from(tokens)
-        .where(eq(tokens.token, token))
-      const row = rows[0]
-      if (!row) return null
-      if (now > row.expiresAt) {
-        await db.delete(tokens).where(eq(tokens.token, token))
-        return null
-      }
-      const org = await db.query.orgs.findFirst({ where: (o, { eq: eqFn }) => eqFn(o.id, row.orgId) })
-      if (!org) return null
-      return { orgId: row.orgId, orgSlug: org.slug, developerId: row.developerId ?? undefined }
-    },
-
-    /**
-     * Revokes a token.
-     */
-    async revokeToken(token: string): Promise<void> {
-      await db.delete(tokens).where(eq(tokens.token, token))
-    },
+export async function verifyToken(db: Db, token: string): Promise<{ orgId: string; orgSlug: string; developerId?: string } | null> {
+  const now = new Date()
+  const rows = await db
+    .select({ orgId: tokens.orgId, developerId: tokens.developerId, expiresAt: tokens.expiresAt })
+    .from(tokens)
+    .where(eq(tokens.token, token))
+  const row = rows[0]
+  if (!row) return null
+  if (now > row.expiresAt) {
+    await db.delete(tokens).where(eq(tokens.token, token))
+    return null
   }
+  const org = await db.query.orgs.findFirst({ where: (o, { eq: eqFn }) => eqFn(o.id, row.orgId) })
+  if (!org) return null
+  return { orgId: row.orgId, orgSlug: org.slug, developerId: row.developerId ?? undefined }
 }
 
-export type LocalhostOAuthProvider = ReturnType<typeof createLocalhostOAuthProvider>
+/**
+ * Issues a new bearer token for an org/developer and persists it in the DB.
+ */
+export async function issueToken(db: Db, orgSlug: string, email?: string, name?: string): Promise<string> {
+  const org = await getOrgBySlug(db, orgSlug)
+  if (!org) throw new Error(`Org not found: ${orgSlug}`)
+  let developerId: string | undefined
+  if (email) {
+    const developer = await upsertDeveloper(db, org.id, email, name)
+    developerId = developer.id
+  }
+  const token = randomUUID()
+  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 365) // 1 year
+  await db.insert(tokens).values({
+    orgId: org.id,
+    developerId: developerId ?? null,
+    token,
+    expiresAt,
+  })
+  return token
+}
 
 /**
  * Creates an MCP server for an org with tools to report session telemetry.
@@ -260,61 +248,85 @@ function renderLoginForm(params: {
 
 /**
  * Creates a multi-tenant Express server that handles MCP connections via StreamableHTTP.
- * Each request is authenticated via a bearer token that maps to an org.
+ * OAuth is handled by the MCP SDK's mcpAuthRouter + requireBearerAuth.
  * Returns { server, port } once the server is listening.
  */
 export async function createCollectionServer(db: Db): Promise<{ server: Server; port: number }> {
-  const oauthProvider = createLocalhostOAuthProvider(db)
+  const port = parseInt(process.env.COLLECTION_PORT ?? '7433', 10)
+  const issuerUrl = new URL(`http://127.0.0.1:${port}`)
+
+  // In-memory stores shared between the OAuth provider and the POST /authorize handler.
+  const clients = new Map<string, OAuthClientInformationFull>()
+  // code -> { token (DB bearer token), codeChallenge (for PKCE) }
+  const authCodes = new Map<string, { token: string; codeChallenge: string }>()
+
+  const clientsStore: OAuthRegisteredClientsStore = {
+    getClient(clientId: string) {
+      return clients.get(clientId)
+    },
+    registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>) {
+      const full: OAuthClientInformationFull = {
+        ...client,
+        client_id: randomUUID(),
+        client_id_issued_at: Math.floor(Date.now() / 1000),
+      }
+      clients.set(full.client_id, full)
+      return full
+    },
+  }
+
+  const oauthProvider: OAuthServerProvider = {
+    clientsStore,
+
+    // Render the interactive login form. The form POSTs to /authorize, which is
+    // registered before mcpAuthRouter so it intercepts form submissions first.
+    async authorize(_client, params, res) {
+      const r = res as express.Response
+      r.send(renderLoginForm({
+        redirect_uri: params.redirectUri,
+        state: params.state,
+        code_challenge: params.codeChallenge,
+        code_challenge_method: (params as Record<string, unknown>).codeChallengeMethod as string | undefined,
+      }))
+    },
+
+    // Return the PKCE challenge stored at authorize time (don't delete — exchange needs the token).
+    async challengeForAuthorizationCode(_client: OAuthClientInformationFull, authorizationCode: string): Promise<string> {
+      const entry = authCodes.get(authorizationCode)
+      if (!entry) throw new Error('Unknown authorization code')
+      return entry.codeChallenge
+    },
+
+    // Return the DB token issued at authorize time, then clean up the code.
+    async exchangeAuthorizationCode(_client: OAuthClientInformationFull, authorizationCode: string): Promise<OAuthTokens> {
+      const entry = authCodes.get(authorizationCode)
+      if (!entry) throw new Error('Unknown authorization code')
+      authCodes.delete(authorizationCode)
+      return { access_token: entry.token, token_type: 'Bearer', expires_in: 365 * 24 * 3600 }
+    },
+
+    async exchangeRefreshToken(): Promise<OAuthTokens> {
+      throw new Error('Refresh tokens are not supported')
+    },
+
+    // Accept any token — real DB validation happens in the /mcp handler.
+    async verifyAccessToken(token: string): Promise<AuthInfo> {
+      return {
+        token,
+        clientId: 'unknown',
+        scopes: [],
+        expiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 3600,
+      }
+    },
+  }
+
   const app = express()
-  app.use(express.json())
-  app.use(express.urlencoded({ extended: false }))
 
-  // In-memory stores for the OAuth flow (single-server, local dev only)
-  const authCodes = new Map<string, string>()    // code -> bearer token
-  const oauthClients = new Map<string, object>() // client_id -> client metadata
-
-  // GET /.well-known/oauth-authorization-server — OAuth 2.0 Authorization Server Metadata (RFC 8414)
-  app.get('/.well-known/oauth-authorization-server', (req, res) => {
-    const base = `http://${req.headers.host}`
-    res.json({
-      issuer: base,
-      authorization_endpoint: `${base}/authorize`,
-      token_endpoint: `${base}/token`,
-      registration_endpoint: `${base}/register`,
-      response_types_supported: ['code'],
-      grant_types_supported: ['authorization_code'],
-      code_challenge_methods_supported: ['S256'],
-      token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
-    })
-  })
-
-  // POST /register — dynamic client registration (RFC 7591)
-  // Accepts any client metadata and returns a client_id. Stored in memory only.
-  app.post('/register', (req, res) => {
-    const clientId = randomUUID()
-    const client = { ...req.body, client_id: clientId }
-    oauthClients.set(clientId, client)
-    res.status(201).json(client)
-  })
-
-  // GET /authorize — authorization endpoint
-  // Serves an interactive login form asking for orgSlug and email.
-  app.get('/authorize', (req, res) => {
-    const redirect_uri = req.query['redirect_uri'] as string | undefined
-    const state = req.query['state'] as string | undefined
-    const code_challenge = req.query['code_challenge'] as string | undefined
-    const code_challenge_method = req.query['code_challenge_method'] as string | undefined
-
-    if (!redirect_uri) {
-      res.status(400).json({ error: 'invalid_request', error_description: 'redirect_uri is required' })
-      return
-    }
-
-    res.send(renderLoginForm({ redirect_uri, state, code_challenge, code_challenge_method }))
-  })
-
-  // POST /authorize — handle login form submission
-  app.post('/authorize', async (req, res) => {
+  // POST /authorize — form submission handler.
+  // Must be registered BEFORE mcpAuthRouter so it intercepts form POSTs
+  // before the router's own /authorize handler can reject them.
+  // urlencoded is scoped here so it doesn't consume the POST /token body.
+  app.post('/authorize', express.urlencoded({ extended: false }), async (req, res) => {
     const { orgSlug, email, redirect_uri, state, code_challenge, code_challenge_method } = req.body as Record<string, string>
 
     if (!redirect_uri) {
@@ -328,14 +340,13 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
     }
 
     try {
-      // Look up the org to get its id
       const org = await getOrgBySlug(db, orgSlug)
       if (!org) {
         res.send(renderLoginForm({ redirect_uri, state, code_challenge, code_challenge_method, error: `Org not found: ${orgSlug}` }))
         return
       }
 
-      // Upsert developer and look for an existing valid token
+      // Upsert developer and reuse an existing valid token if one exists.
       const developer = await upsertDeveloper(db, org.id, email)
       const now = new Date()
       const existingRows = await db
@@ -348,11 +359,11 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
       if (existingRows.length > 0) {
         token = existingRows[0].token
       } else {
-        token = await oauthProvider.issueToken(orgSlug, email)
+        token = await issueToken(db, orgSlug, email)
       }
 
       const code = randomUUID()
-      authCodes.set(code, token)
+      authCodes.set(code, { token, codeChallenge: code_challenge ?? '' })
 
       const redirectUrl = new URL(redirect_uri)
       redirectUrl.searchParams.set('code', code)
@@ -365,33 +376,19 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
     }
   })
 
-  // POST /token — token endpoint
-  // Exchanges an authorization code for the bearer token.
-  app.post('/token', express.urlencoded({ extended: false }), (req, res) => {
-    // Accept both JSON and form-encoded bodies (the middleware above handles urlencoded)
-    const body = req.body as Record<string, string>
-    const { grant_type, code } = body
+  // Mount the SDK OAuth router — handles /.well-known/*, /register, GET /authorize, /token.
+  app.use(mcpAuthRouter({ provider: oauthProvider, issuerUrl }))
 
-    if (grant_type !== 'authorization_code') {
-      res.status(400).json({ error: 'unsupported_grant_type', error_description: 'Only authorization_code is supported' })
-      return
-    }
-
-    if (!code || !authCodes.has(code)) {
-      res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' })
-      return
-    }
-
-    const token = authCodes.get(code)!
-    authCodes.delete(code)
-
-    res.json({ access_token: token, token_type: 'Bearer' })
+  // Bearer auth middleware — returns 401 + WWW-Authenticate on unauthenticated requests,
+  // triggering the MCP client's automatic OAuth flow.
+  const bearerAuth = requireBearerAuth({
+    verifier: oauthProvider,
+    resourceMetadataUrl: `${issuerUrl.href}.well-known/oauth-protected-resource`,
   })
 
-  // POST /auth/register — issue a token for a developer.
+  // POST /auth/register — convenience endpoint to issue a token directly (bypassing OAuth flow).
   // Body: { orgSlug: string, email: string, name?: string }
-  // Returns: { token: string, developerId: string }
-  app.post('/auth/register', async (req, res) => {
+  app.post('/auth/register', express.json(), async (req, res) => {
     const { orgSlug, email, name } = req.body ?? {}
     if (!orgSlug || typeof orgSlug !== 'string') {
       res.status(400).json({ error: 'orgSlug is required' })
@@ -402,8 +399,8 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
       return
     }
     try {
-      const token = await oauthProvider.issueToken(orgSlug, email, name ?? undefined)
-      const orgCtx = await oauthProvider.verifyToken(token)
+      const token = await issueToken(db, orgSlug, email, name ?? undefined)
+      const orgCtx = await verifyToken(db, token)
       res.json({ token, developerId: orgCtx?.developerId })
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error'
@@ -411,21 +408,18 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
     }
   })
 
-  // Active transports per session
+  // Active transports per MCP session.
   const transports = new Map<string, StreamableHTTPServerTransport>()
 
-  app.all('/mcp', async (req, res) => {
-    // Extract bearer token for org resolution
-    const authHeader = req.headers.authorization ?? ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
-    const orgCtx = await oauthProvider.verifyToken(token)
-
+  app.all('/mcp', bearerAuth, async (req, res) => {
+    // bearerAuth has already validated the token. Re-query for orgId + developerId.
+    const authInfo = (req as unknown as { auth: AuthInfo }).auth
+    const orgCtx = await verifyToken(db, authInfo.token)
     if (!orgCtx) {
-      res.status(401).json({ error: 'Unauthorized: invalid or missing token' })
+      res.status(401).json({ error: 'Unauthorized' })
       return
     }
 
-    // Reuse existing transport for this session if present
     const sessionId = req.headers['mcp-session-id'] as string | undefined
 
     let transport: StreamableHTTPServerTransport
@@ -433,7 +427,6 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
     if (sessionId && transports.has(sessionId)) {
       transport = transports.get(sessionId)!
     } else if (req.method === 'POST' && !sessionId) {
-      // New session initialization
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
       })
@@ -446,20 +439,19 @@ export async function createCollectionServer(db: Db): Promise<{ server: Server; 
 
       const mcp = createOrgMcp(db, orgCtx.orgId, orgCtx.developerId)
       await mcp.connect(transport)
-
-      if (transport.sessionId) {
-        transports.set(transport.sessionId, transport)
-      }
     } else {
       res.status(400).json({ error: 'Bad request: missing or invalid session' })
       return
     }
 
-    await transport.handleRequest(req, res, req.body)
+    await transport.handleRequest(req, res)
+
+    if (transport.sessionId && !transports.has(transport.sessionId)) {
+      transports.set(transport.sessionId, transport)
+    }
   })
 
   const server = createServer(app)
-  const port = parseInt(process.env.COLLECTION_PORT ?? '7433', 10)
 
   await new Promise<void>((resolve) => {
     server.listen(port, '127.0.0.1', resolve)
