@@ -1,6 +1,6 @@
 import { spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
-import { writeFileSync, openSync } from 'fs'
+import { writeFileSync, mkdirSync, openSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -51,6 +51,7 @@ export function buildWorkerArgs(cfg: SpawnConfig): string[] {
 
   return [
     '--mcp-config', cfg.mcpConfigPath,
+    '--allow-dangerously-skip-permissions',
     '--dangerously-skip-permissions',
     '--print',
     '--verbose',
@@ -67,6 +68,19 @@ export function spawnWorker(cfg: SpawnConfig): ChildProcess {
   // Redirect both stdout and stderr to a log file — captures Claude's full
   // output (reasoning, tool calls, text) for post-mortem debugging and live
   // tailing with: tail -f <path>
+  const claudeDir = join(cfg.worktreePath, '.claude')
+  mkdirSync(claudeDir, { recursive: true })
+  writeFileSync(
+    join(claudeDir, 'settings.local.json'),
+    JSON.stringify({ permissions: { allow: 
+      ['Bash(*)', 'Write(*)', 'Edit(*)', 'Read(*)',
+        'mcp__multiclaude-worker__get_my_task',
+        'mcp__multiclaude-worker__report_progress',
+        'mcp__multiclaude-worker__report_done',
+        'mcp__multiclaude-worker__report_blocked'
+      ]
+     } }, null, 2)
+  )
   const logFd = openSync(workerLogPath(cfg.agentId), 'a')
   return spawn('claude', buildWorkerArgs(cfg), {
     cwd: cfg.worktreePath,

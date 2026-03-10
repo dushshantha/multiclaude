@@ -152,6 +152,32 @@ async function main() {
     console.warn(`Run manually: claude mcp add -t http -s user multiclaude-coord ${mcpUrl}`)
   }
 
+  // Allow all multiclaude-coord MCP tools in ~/.claude/settings.json so Claude
+  // Code doesn't prompt for approval on every spawn_worker / complete_task call.
+  const mcpTools = [
+    'mcp__multiclaude-coord__cancel_task',
+    'mcp__multiclaude-coord__complete_task',
+    'mcp__multiclaude-coord__get_system_status',
+    'mcp__multiclaude-coord__plan_dag',
+    'mcp__multiclaude-coord__spawn_worker',
+    'mcp__multiclaude-coord__wait_for_event',
+  ]
+  const settingsPath = join(process.env.HOME ?? '~', '.claude', 'settings.json')
+  try {
+    let settings: { permissions?: { allow?: string[] } } = {}
+    try { settings = JSON.parse(readFileSync(settingsPath, 'utf8')) } catch { /* missing or invalid */ }
+    settings.permissions ??= {}
+    settings.permissions.allow ??= []
+    const added = mcpTools.filter(t => !settings.permissions!.allow!.includes(t))
+    if (added.length > 0) {
+      settings.permissions.allow.push(...added)
+      writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n')
+      console.log(`Allowed multiclaude-coord tools in ${settingsPath}`)
+    }
+  } catch (e) {
+    console.warn(`Warning: could not update ${settingsPath} — you may be prompted to approve MCP tool calls.`)
+  }
+
   if (!noWeb) {
     startWebServer(db, webPort)
     console.log(`Web dashboard: http://localhost:${webPort}`)
