@@ -4,6 +4,7 @@ import { startWebServer } from './web/server.js'
 import { startTui } from './tui/index.js'
 import { spawnWorker, writeWorkerMcpConfig, workerLogPath } from './spawner/index.js'
 import { spawnCursorWorker } from './spawner/cursor.js'
+import { openWorkerTerminal } from './spawner/terminal.js'
 import { getTask, updateTask } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
@@ -45,6 +46,7 @@ function startSpawnerWatcher(
   mcpConfigPath: string,
   workerRuntime: WorkerRuntime = 'claude',
   serverPort: number = 7432,
+  openTerminals: boolean = false,
 ): void {
   const launched = new Set<string>()
 
@@ -91,6 +93,10 @@ function startSpawnerWatcher(
 
         updateAgent(db, agent.id, { pid: ptyProcess.pid })
 
+        if (openTerminals) {
+          openWorkerTerminal(agent.id, workerLogPath(agent.id))
+        }
+
         ptyProcess.onExit(() => {
           // If worker exited without calling report_done, mark agent as failed
           const current = db.prepare(
@@ -112,6 +118,10 @@ function startSpawnerWatcher(
 
         if (child.pid !== undefined) {
           updateAgent(db, agent.id, { pid: child.pid })
+        }
+
+        if (openTerminals) {
+          openWorkerTerminal(agent.id, workerLogPath(agent.id))
         }
 
         child.on('error', (err) => {
@@ -161,6 +171,7 @@ async function main() {
   // --- start (default) ---
   const noTui = args.includes('--no-tui')
   const noWeb = args.includes('--no-web')
+  const openTerminals = args.includes('--open-terminals')
   const coordPortArg = args.find(a => a.startsWith('--coord-port='))
   const webPortArg = args.find(a => a.startsWith('--web-port='))
   const coordPort = coordPortArg ? parseInt(coordPortArg.split('=')[1]) : 7432
@@ -197,7 +208,7 @@ async function main() {
   const mcpConfigPath = writeWorkerMcpConfig(port)
 
   // Start watcher: polls DB for spawning agents and launches worker subprocesses
-  startSpawnerWatcher(db, mcpConfigPath, effectiveRuntime, port)
+  startSpawnerWatcher(db, mcpConfigPath, effectiveRuntime, port, openTerminals)
 
   // Register multiclaude-coord in Claude Code's user config via `claude mcp add`.
   // Claude Code stores user-level MCP servers in ~/.claude.json — using the CLI
@@ -301,6 +312,7 @@ async function main() {
 
   console.log(`\nMultiClaude running!`)
   console.log(`  Worker runtime:     ${effectiveRuntime}`)
+  console.log(`  Terminal windows:   ${openTerminals ? 'enabled (--open-terminals)' : 'disabled (pass --open-terminals to enable)'}`)
   console.log(`  Connect a project:  multiclaude init   (run from your project directory)`)
   console.log(`  Then just run:      ${effectiveRuntime === 'cursor' ? 'cursor' : 'claude'}`)
   console.log(`\nNote: ports ${coordPort} (coord) and ${webPort} (web) are reserved — avoid killing them in agent tasks.\n`)
