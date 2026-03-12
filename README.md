@@ -66,16 +66,27 @@ multiclaude start --web-port=8001   # custom web dashboard port
 
 ## Connect the Orchestrator
 
-In the project directory you want to work on, run `multiclaude init` to set it up. Then launch Claude Code:
+In the project directory you want to work on, run `multiclaude init` to set it up. Then launch your orchestrator agent.
+
+### Using Claude Code (default)
 
 ```bash
-multiclaude init
+multiclaude init           # or: multiclaude init --claude
 claude
 ```
 
 Claude Code will automatically connect to the coordination server. You should see the `multiclaude-coord` MCP server listed as connected in `/mcp`.
 
 If the `multiclaude-coord` server shows as unauthenticated in `/mcp`, run `/mcp` and select the server to complete the OAuth flow.
+
+### Using Cursor Agent
+
+```bash
+multiclaude init --cursor
+cursor agent
+```
+
+The `--cursor` flag writes `.cursor/rules/multiclaude-orchestrator.mdc` with orchestrator instructions and skips writing `CLAUDE.md`.
 
 > **Note:** Ports 7432 (coord) and 7433 (web) are reserved for MultiClaude. Don't kill processes on these ports during agent tasks.
 
@@ -134,6 +145,57 @@ Show me the ASCII DAG visualization, then I'll tell you whether to proceed or re
 ```
 The orchestrator will display the task graph and ask: **"Does this plan look good? Proceed / Revise"**
 If you choose Revise, describe what to change (e.g. "split the middleware task into two") and the orchestrator will regenerate the DAG and ask again. Once you choose Proceed, workers are spawned immediately.
+
+## Using Cursor Agent
+
+MultiClaude supports [Cursor Agent CLI](https://cursor.com) as an alternative to Claude Code for both the orchestrator and worker agents.
+
+### Prerequisites
+
+- [Cursor](https://cursor.com) installed with CLI available (`cursor --version`)
+- Active **Cursor Pro or Business** subscription (required for agent and MCP features)
+
+### Setup
+
+```bash
+# In your project directory, choose Cursor as the runtime at init time:
+multiclaude init --cursor
+
+# Start the coordination server (from the multiclaude repo):
+multiclaude start
+
+# Run the orchestrator using Cursor Agent:
+cd /path/to/your/project
+cursor agent
+```
+
+The `--cursor` flag:
+- Saves `workerRuntime: "cursor"` in `.multiclaude.json`
+- Writes `.cursor/rules/multiclaude-orchestrator.mdc` with orchestrator instructions
+- Skips writing `CLAUDE.md`
+
+On `multiclaude start`, the server also writes:
+- `~/.cursor/mcp.json` — registers the `multiclaude-coord` MCP endpoint globally
+- `~/.cursor/cli-config.json` — pre-approves the MultiClaude MCP tools so Cursor doesn't prompt for each one
+
+### Known Limitations
+
+- **PTY requirement:** Cursor CLI requires a real TTY and hangs indefinitely when spawned as a plain subprocess. MultiClaude uses `node-pty` to wrap worker processes in a pseudo-TTY.
+- **Per-agent MCP config:** Cursor does not support per-invocation MCP config flags (unlike Claude Code's `--mcp-config`). Workers use project-scoped `.cursor/mcp.json` written into their git worktree as a workaround. ([Cursor forum thread](https://forum.cursor.com/t/per-agent-mcp-configuration/153716))
+- **No `--dangerously-skip-permissions` equivalent:** Cursor manages permissions via `~/.cursor/cli-config.json`. MultiClaude pre-populates this with the required tool allow-list on server start.
+- **Model availability:** Cursor Agent uses whatever models are configured in your Cursor subscription. Claude models are available if enabled in your Cursor settings.
+
+### Comparison
+
+| Feature | Claude Code (`--claude`) | Cursor Agent (`--cursor`) |
+|---|---|---|
+| Subscription | Anthropic (API or Max) | Cursor Pro/Business |
+| Model choice | Claude models only | Any model in Cursor |
+| MCP support | Full | Full (v1.6+) |
+| Headless/CI use | Yes | Yes (via PTY wrapper) |
+| Skip-permissions flag | `--dangerously-skip-permissions` | `~/.cursor/cli-config.json` allow-list |
+| Init flag | `--claude` (default) | `--cursor` |
+| System instructions | `CLAUDE.md` | `.cursor/rules/*.mdc` |
 
 ## Run Tests
 
