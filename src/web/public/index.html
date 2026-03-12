@@ -29,6 +29,7 @@
     /* Log panel */
     .task-row { cursor: pointer; }
     .task-row:hover td { background: #1e1e3a; }
+    td, th, .log-entry, .log-path { user-select: text; }
     .log-row td { padding: 0; border-bottom: none; }
     .log-panel {
       display: none;
@@ -177,6 +178,8 @@
     }
 
     function togglePanel(taskId) {
+      // Don't toggle if the user is selecting text
+      if (window.getSelection && window.getSelection().toString()) return
       if (openPanels.has(taskId)) {
         openPanels.delete(taskId)
       } else {
@@ -186,7 +189,12 @@
     }
 
     const es = new EventSource('/api/events')
-    es.onmessage = ({ data }) => render(JSON.parse(data))
+    es.onmessage = ({ data }) => {
+      const newData = JSON.parse(data)
+      // Skip re-render if nothing changed, to preserve any active text selection
+      if (latestData && JSON.stringify(newData) === JSON.stringify(latestData)) return
+      render(newData)
+    }
   </script>
 </body>
 </html>
