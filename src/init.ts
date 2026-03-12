@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join, dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
+import { writeConfig } from './config.js'
+import type { WorkerRuntime } from './config.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -27,17 +29,31 @@ export const MULTICLAUDE_PERMISSIONS = [
 
 export interface InitOptions {
   projectDir?: string
+  /** Worker runtime to use. Defaults to 'claude' for backwards compatibility. */
+  runtime?: WorkerRuntime
 }
 
 export function runInit(opts: InitOptions = {}): void {
   const projectDir = resolve(opts.projectDir ?? process.cwd())
+  const runtime: WorkerRuntime = opts.runtime ?? 'claude'
 
+  writeConfig(projectDir, { workerRuntime: runtime })
   updateSettings(projectDir)
-  updateClaudeMd(projectDir)
 
-  console.log(`✓ MultiClaude initialized in ${projectDir}`)
-  console.log(`  .claude/settings.local.json — permissions added`)
-  console.log(`  CLAUDE.md — orchestrator instructions added`)
+  if (runtime === 'cursor') {
+    updateCursorRules(projectDir)
+    console.log(`✓ MultiClaude initialized in ${projectDir} (Cursor mode)`)
+    console.log(`  .multiclaude.json — workerRuntime: cursor`)
+    console.log(`  .claude/settings.local.json — permissions added`)
+    console.log(`  .cursor/rules/multiclaude-orchestrator.mdc — orchestrator instructions added`)
+  } else {
+    updateClaudeMd(projectDir)
+    console.log(`✓ MultiClaude initialized in ${projectDir}`)
+    console.log(`  .multiclaude.json — workerRuntime: claude`)
+    console.log(`  .claude/settings.local.json — permissions added`)
+    console.log(`  CLAUDE.md — orchestrator instructions added`)
+  }
+
   console.log(`\nMake sure MultiClaude is running: multiclaude start`)
   console.log(`Then just run:                    claude   (from this directory)`)
 }
@@ -94,6 +110,16 @@ function updateClaudeMd(projectDir: string): void {
   }
 
   writeFileSync(claudeMdPath, updated)
+}
+
+function updateCursorRules(projectDir: string): void {
+  const cursorRulesDir = join(projectDir, '.cursor', 'rules')
+  mkdirSync(cursorRulesDir, { recursive: true })
+
+  const mdcPath = join(cursorRulesDir, 'multiclaude-orchestrator.mdc')
+  const orchestratorContent = loadOrchestratorContent()
+
+  writeFileSync(mdcPath, orchestratorContent + '\n')
 }
 
 function loadOrchestratorContent(): string {

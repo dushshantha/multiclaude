@@ -3,12 +3,15 @@ import { startCoordServer } from './server/index.js'
 import { startWebServer } from './web/server.js'
 import { startTui } from './tui/index.js'
 import { spawnWorker, writeWorkerMcpConfig, workerLogPath } from './spawner/index.js'
+import { spawnCursorWorker } from './spawner/cursor.js'
 import { getTask, updateTask } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
 import { runInit } from './init.js'
+import { readConfig } from './config.js'
+import type { WorkerRuntime } from './config.js'
 import type Database from 'better-sqlite3'
 
 interface AgentRow {
@@ -37,7 +40,12 @@ function parseTokensFromLog(logPath: string): { input_tokens?: number; output_to
   return {}
 }
 
-function startSpawnerWatcher(db: Database.Database, mcpConfigPath: string): void {
+function startSpawnerWatcher(
+  db: Database.Database,
+  mcpConfigPath: string,
+  workerRuntime: WorkerRuntime = 'claude',
+  serverPort: number = 7432,
+): void {
   const launched = new Set<string>()
 
   setInterval(() => {
@@ -60,42 +68,76 @@ function startSpawnerWatcher(db: Database.Database, mcpConfigPath: string): void
       // if the cwd doesn't exist before the process starts.
       mkdirSync(agent.cwd, { recursive: true })
 
-      const child = spawnWorker({
+      const spawnCfg = {
         taskId: task.id,
         taskTitle: task.title,
         taskDescription: task.description ?? undefined,
         agentId: agent.id,
         worktreePath: agent.cwd,
         mcpConfigPath,
-      })
-
-      if (child.pid !== undefined) {
-        updateAgent(db, agent.id, { pid: child.pid })
       }
 
-      child.on('error', (err) => {
-        // spawn failed (e.g. 'claude' binary not found) — mark agent failed so
-        // the orchestrator can retry instead of waiting forever
-        console.error(`[spawner] Failed to launch worker ${agent.id}: ${err.message}`)
-        updateAgent(db, agent.id, { status: 'failed' })
-      })
-
-      child.on('exit', () => {
-        // If worker exited without calling report_done, mark agent as failed
-        const current = db.prepare(
-          "SELECT status FROM agents WHERE id = ?"
-        ).get(agent.id) as { status: string } | undefined
-        if (current?.status === 'running' || current?.status === 'spawning') {
+      if (workerRuntime === 'cursor') {
+        // Cursor worker: uses node-pty, writes its own .cursor/mcp.json
+        let ptyProcess
+        try {
+          ptyProcess = spawnCursorWorker({ ...spawnCfg, serverPort })
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err)
+          console.error(`[spawner] Failed to launch Cursor worker ${agent.id}: ${msg}`)
           updateAgent(db, agent.id, { status: 'failed' })
+          continue
         }
-        // Parse token usage from the worker log and store it on the task
-        if (agent.task_id) {
-          const tokens = parseTokensFromLog(workerLogPath(agent.id))
-          if (tokens.total_tokens !== undefined) {
-            updateTask(db, agent.task_id, tokens)
+
+        updateAgent(db, agent.id, { pid: ptyProcess.pid })
+
+        ptyProcess.onExit(() => {
+          // If worker exited without calling report_done, mark agent as failed
+          const current = db.prepare(
+            "SELECT status FROM agents WHERE id = ?"
+          ).get(agent.id) as { status: string } | undefined
+          if (current?.status === 'running' || current?.status === 'spawning') {
+            updateAgent(db, agent.id, { status: 'failed' })
           }
+          if (agent.task_id) {
+            const tokens = parseTokensFromLog(workerLogPath(agent.id))
+            if (tokens.total_tokens !== undefined) {
+              updateTask(db, agent.task_id, tokens)
+            }
+          }
+        })
+      } else {
+        // Claude worker: uses ChildProcess with --mcp-config
+        const child = spawnWorker(spawnCfg)
+
+        if (child.pid !== undefined) {
+          updateAgent(db, agent.id, { pid: child.pid })
         }
-      })
+
+        child.on('error', (err) => {
+          // spawn failed (e.g. 'claude' binary not found) — mark agent failed so
+          // the orchestrator can retry instead of waiting forever
+          console.error(`[spawner] Failed to launch worker ${agent.id}: ${err.message}`)
+          updateAgent(db, agent.id, { status: 'failed' })
+        })
+
+        child.on('exit', () => {
+          // If worker exited without calling report_done, mark agent as failed
+          const current = db.prepare(
+            "SELECT status FROM agents WHERE id = ?"
+          ).get(agent.id) as { status: string } | undefined
+          if (current?.status === 'running' || current?.status === 'spawning') {
+            updateAgent(db, agent.id, { status: 'failed' })
+          }
+          // Parse token usage from the worker log and store it on the task
+          if (agent.task_id) {
+            const tokens = parseTokensFromLog(workerLogPath(agent.id))
+            if (tokens.total_tokens !== undefined) {
+              updateTask(db, agent.task_id, tokens)
+            }
+          }
+        })
+      }
     }
   }, 1000)
 }
@@ -105,7 +147,14 @@ async function main() {
   const subcommand = args[0] && !args[0].startsWith('--') ? args[0] : 'start'
 
   if (subcommand === 'init') {
-    runInit({ projectDir: process.cwd() })
+    const useCursor = args.includes('--cursor')
+    const useClaude = args.includes('--claude')
+    if (useCursor && useClaude) {
+      console.error('Error: --cursor and --claude are mutually exclusive.')
+      process.exit(1)
+    }
+    const runtime = useCursor ? 'cursor' : 'claude'
+    runInit({ projectDir: process.cwd(), runtime })
     return
   }
 
@@ -117,6 +166,15 @@ async function main() {
   const coordPort = coordPortArg ? parseInt(coordPortArg.split('=')[1]) : 7432
   const webPort = webPortArg ? parseInt(webPortArg.split('=')[1]) : 7433
 
+  const workerRuntimeArg = args.find(a => a.startsWith('--worker-runtime='))
+  const workerRuntimeFlag = workerRuntimeArg
+    ? (workerRuntimeArg.split('=')[1] as WorkerRuntime)
+    : null
+  if (workerRuntimeFlag && workerRuntimeFlag !== 'claude' && workerRuntimeFlag !== 'cursor') {
+    console.error(`Error: --worker-runtime must be "claude" or "cursor", got "${workerRuntimeFlag}"`)
+    process.exit(1)
+  }
+
   const reset = args.includes('--reset')
   if (reset) {
     const dbPath = join(process.cwd(), 'multiclaude.db')
@@ -126,6 +184,11 @@ async function main() {
     console.log('Database reset.')
   }
 
+  // Read .multiclaude.json config early so we can route workers correctly.
+  // --worker-runtime flag takes precedence over config file.
+  const multiclaudeConfig = readConfig(process.cwd())
+  const effectiveRuntime: WorkerRuntime = workerRuntimeFlag ?? multiclaudeConfig?.workerRuntime ?? 'claude'
+
   console.log('Starting MultiClaude...')
 
   const { db, port } = await startCoordServer({ port: coordPort })
@@ -133,8 +196,8 @@ async function main() {
 
   const mcpConfigPath = writeWorkerMcpConfig(port)
 
-  // Start watcher: polls DB for spawning agents and launches claude subprocesses
-  startSpawnerWatcher(db, mcpConfigPath)
+  // Start watcher: polls DB for spawning agents and launches worker subprocesses
+  startSpawnerWatcher(db, mcpConfigPath, effectiveRuntime, port)
 
   // Register multiclaude-coord in Claude Code's user config via `claude mcp add`.
   // Claude Code stores user-level MCP servers in ~/.claude.json — using the CLI
@@ -178,14 +241,68 @@ async function main() {
     console.warn(`Warning: could not update ${settingsPath} — you may be prompted to approve MCP tool calls.`)
   }
 
+  // --- Cursor IDE config ---
+
+  // (1) Merge multiclaude-coord into ~/.cursor/mcp.json
+  const cursorDir = join(process.env.HOME ?? '~', '.cursor')
+  const cursorMcpPath = join(cursorDir, 'mcp.json')
+  try {
+    mkdirSync(cursorDir, { recursive: true })
+    let cursorMcp: { mcpServers?: Record<string, unknown> } = {}
+    try { cursorMcp = JSON.parse(readFileSync(cursorMcpPath, 'utf8')) } catch { /* missing or invalid */ }
+    cursorMcp.mcpServers ??= {}
+    cursorMcp.mcpServers['multiclaude-coord'] = { url: mcpUrl, type: 'http' }
+    writeFileSync(cursorMcpPath, JSON.stringify(cursorMcp, null, 2) + '\n')
+    console.log(`Cursor MCP registered: multiclaude-coord → ${mcpUrl} (${cursorMcpPath})`)
+  } catch (e) {
+    console.warn(`Warning: could not update ${cursorMcpPath} — configure Cursor MCP manually.`)
+  }
+
+  // (2) Merge tool allow-lists into ~/.cursor/cli-config.json
+  // Always allow orchestrator tools; also allow worker tools when workerRuntime is 'cursor'
+  const cursorCoordTools = [
+    'mcp__multiclaude-coord__cancel_task',
+    'mcp__multiclaude-coord__complete_task',
+    'mcp__multiclaude-coord__get_system_status',
+    'mcp__multiclaude-coord__plan_dag',
+    'mcp__multiclaude-coord__spawn_worker',
+    'mcp__multiclaude-coord__wait_for_event',
+  ]
+  const cursorWorkerTools = [
+    'mcp__multiclaude-worker__get_my_task',
+    'mcp__multiclaude-worker__report_progress',
+    'mcp__multiclaude-worker__report_done',
+    'mcp__multiclaude-worker__report_blocked',
+  ]
+  const cursorSettingsPath = join(cursorDir, 'cli-config.json')
+  try {
+    let cursorSettings: { permissions?: { allow?: string[] } } = {}
+    try { cursorSettings = JSON.parse(readFileSync(cursorSettingsPath, 'utf8')) } catch { /* missing or invalid */ }
+    cursorSettings.permissions ??= {}
+    cursorSettings.permissions.allow ??= []
+    const toolsToAdd = effectiveRuntime === 'cursor'
+      ? [...cursorCoordTools, ...cursorWorkerTools]
+      : cursorCoordTools
+    const added = toolsToAdd.filter(t => !cursorSettings.permissions!.allow!.includes(t))
+    if (added.length > 0) {
+      cursorSettings.permissions.allow.push(...added)
+      writeFileSync(cursorSettingsPath, JSON.stringify(cursorSettings, null, 2) + '\n')
+      const label = effectiveRuntime === 'cursor' ? 'multiclaude-coord + multiclaude-worker' : 'multiclaude-coord'
+      console.log(`Allowed ${label} tools in ${cursorSettingsPath}`)
+    }
+  } catch (e) {
+    console.warn(`Warning: could not update ${cursorSettingsPath} — you may be prompted to approve MCP tool calls in Cursor.`)
+  }
+
   if (!noWeb) {
     startWebServer(db, webPort)
     console.log(`Web dashboard: http://localhost:${webPort}`)
   }
 
   console.log(`\nMultiClaude running!`)
+  console.log(`  Worker runtime:     ${effectiveRuntime}`)
   console.log(`  Connect a project:  multiclaude init   (run from your project directory)`)
-  console.log(`  Then just run:      claude`)
+  console.log(`  Then just run:      ${effectiveRuntime === 'cursor' ? 'cursor' : 'claude'}`)
   console.log(`\nNote: ports ${coordPort} (coord) and ${webPort} (web) are reserved — avoid killing them in agent tasks.\n`)
 
   if (!noTui) {
