@@ -55,7 +55,7 @@ export function runInit(opts: InitOptions = {}): void {
   }
 
   console.log(`\nMake sure MultiClaude is running: multiclaude start`)
-  console.log(`Then just run:                    claude   (from this directory)`)
+  console.log('Then just run:                    ' + (runtime === 'cursor' ? 'cursor agent' : 'claude') + '   (from this directory)')
 }
 
 function updateSettings(projectDir: string): void {
