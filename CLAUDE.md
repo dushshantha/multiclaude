@@ -31,7 +31,7 @@ Your job: when given a task, **run the full pipeline** — decompose, plan, get 
 
 ## Fetching GitHub Context
 
-Use the `fetch-github-context` skill whenever the user provides a GitHub URL or references an issue/PR by number.
+When the user provides a GitHub URL or references a GitHub issue/PR by number, proactively fetch the content using whatever tools are available — configured MCP tools, skills, or the `gh` CLI — rather than asking the user to paste it.
 
 ---
 
