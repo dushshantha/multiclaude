@@ -54,8 +54,7 @@ export function buildWorkerArgs(cfg: SpawnConfig): string[] {
     '--allow-dangerously-skip-permissions',
     '--dangerously-skip-permissions',
     '--print',
-    '--verbose',
-    '--output-format', 'stream-json',
+    '--output-format', 'text',
     prompt,
   ]
 }

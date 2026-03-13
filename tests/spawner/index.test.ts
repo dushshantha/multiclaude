@@ -26,7 +26,7 @@ describe('spawner', () => {
     expect(args).toContain('/tmp/mc-worker-config.json')
   })
 
-  it('buildWorkerArgs includes --print --verbose --output-format stream-json for token tracking', () => {
+  it('buildWorkerArgs uses --output-format text for human-readable terminal output', () => {
     const cfg: SpawnConfig = {
       taskId: 'task-1',
       taskTitle: 'Build JWT auth',
@@ -36,9 +36,9 @@ describe('spawner', () => {
     }
     const args = buildWorkerArgs(cfg)
     expect(args).toContain('--print')
-    expect(args).toContain('--verbose')
+    expect(args).not.toContain('--verbose')
     expect(args).toContain('--output-format')
-    expect(args[args.indexOf('--output-format') + 1]).toBe('stream-json')
+    expect(args[args.indexOf('--output-format') + 1]).toBe('text')
   })
 
   it('buildWorkerArgs prompt includes task title', () => {
