@@ -21,7 +21,7 @@ You have access to the `multiclaude-coord` MCP server with worker-scoped tools.
 ## When Done
 
 - Run all tests. Ensure they pass.
-- Call `report_done(task_id, summary)` with a 1-2 sentence summary of what you built.
+- Call `report_done(task_id, summary, input_tokens, output_tokens, total_tokens)` with a 1-2 sentence summary of what you built. Pass your approximate token usage if you have it (these are optional but help the orchestrator track costs).
 - Do NOT push branches — the orchestrator handles merging.
 
 ## When Blocked

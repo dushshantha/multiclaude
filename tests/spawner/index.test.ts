@@ -26,13 +26,29 @@ describe('spawner', () => {
     expect(args).toContain('/tmp/mc-worker-config.json')
   })
 
-  it('buildWorkerArgs uses --output-format text for human-readable terminal output', () => {
+  it('buildWorkerArgs uses stream-json by default for token capture via log parsing', () => {
     const cfg: SpawnConfig = {
       taskId: 'task-1',
       taskTitle: 'Build JWT auth',
       agentId: 'w-task-1',
       worktreePath: '/tmp/mc-task-1',
       mcpConfigPath: '/tmp/mc-worker-config.json',
+    }
+    const args = buildWorkerArgs(cfg)
+    expect(args).toContain('--print')
+    expect(args).toContain('--verbose')
+    expect(args).toContain('--output-format')
+    expect(args[args.indexOf('--output-format') + 1]).toBe('stream-json')
+  })
+
+  it('buildWorkerArgs uses text format when openTerminals=true for human-readable terminal output', () => {
+    const cfg: SpawnConfig = {
+      taskId: 'task-1',
+      taskTitle: 'Build JWT auth',
+      agentId: 'w-task-1',
+      worktreePath: '/tmp/mc-task-1',
+      mcpConfigPath: '/tmp/mc-worker-config.json',
+      openTerminals: true,
     }
     const args = buildWorkerArgs(cfg)
     expect(args).toContain('--print')
