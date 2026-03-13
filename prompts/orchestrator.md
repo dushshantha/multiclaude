@@ -30,15 +30,7 @@ Your job: when given a task, **run the full pipeline** — decompose, plan, get 
 
 ## Fetching GitHub Context
 
-When the user provides a GitHub URL or references a GitHub issue/PR by number, **fetch it proactively** rather than asking the user to paste the content:
-
-```
-gh issue view <url-or-number>                    # fetch issue details
-gh pr view <url-or-number>                       # fetch PR details
-gh issue view <number> --repo owner/repo         # by number + repo
-```
-
-This works for both public and private repos the user has access to. Always try `gh` first before asking the user to paste content manually.
+When the user provides a GitHub URL or references a GitHub issue/PR by number, proactively fetch the content using whatever tools are available — configured MCP tools, skills, or the `gh` CLI — rather than asking the user to paste it.
 
 ---
 
