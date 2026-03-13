@@ -11,6 +11,7 @@ export interface SpawnConfig {
   agentId: string
   worktreePath: string
   mcpConfigPath: string
+  openTerminals?: boolean
 }
 
 export interface WorkerMcpConfig {
@@ -49,12 +50,19 @@ export function buildWorkerArgs(cfg: SpawnConfig): string[] {
     '\nWhen complete, call report_done with a summary. If blocked, call report_blocked.',
   ].join('')
 
+  // Use stream-json when not showing in a terminal window — the exit handler
+  // in cli.ts parses the result message to extract token usage counts.
+  // Use text format when opening terminal windows so the output is readable.
+  const outputFormat = cfg.openTerminals ? 'text' : 'stream-json'
+  const extraFlags = cfg.openTerminals ? [] : ['--verbose']
+
   return [
     '--mcp-config', cfg.mcpConfigPath,
     '--allow-dangerously-skip-permissions',
     '--dangerously-skip-permissions',
     '--print',
-    '--output-format', 'text',
+    ...extraFlags,
+    '--output-format', outputFormat,
     prompt,
   ]
 }

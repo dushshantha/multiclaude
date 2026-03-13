@@ -77,6 +77,7 @@ function startSpawnerWatcher(
         agentId: agent.id,
         worktreePath: agent.cwd,
         mcpConfigPath,
+        openTerminals,
       }
 
       if (workerRuntime === 'cursor') {
