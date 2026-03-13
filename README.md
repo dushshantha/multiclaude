@@ -58,11 +58,18 @@ This starts:
 
 Optional flags:
 ```bash
-multiclaude start --no-tui          # skip terminal UI
-multiclaude start --no-web          # skip web dashboard
-multiclaude start --coord-port=8000 # custom coord server port
-multiclaude start --web-port=8001   # custom web dashboard port
+multiclaude start --no-tui            # skip terminal UI
+multiclaude start --no-web            # skip web dashboard
+multiclaude start --open-terminals    # open a terminal window per worker
+multiclaude start --coord-port=8000   # custom coord server port
+multiclaude start --web-port=8001     # custom web dashboard port
 ```
+
+### `--open-terminals`
+
+When `--open-terminals` is passed, MultiClaude opens a dedicated terminal window for each worker as it spawns. Each window tails the worker's log file and shows the agent's output as clean, readable text — the same conversational Claude output you see in a normal Claude Code session, not raw JSON or XML.
+
+Terminal priority: tmux new-window (if `$TMUX` is set) → macOS Terminal.app → Linux terminal emulators (gnome-terminal, xterm, konsole, etc.). If no supported terminal is found, the tail command is printed to the console so you can open it manually.
 
 ## Connect the Orchestrator
 
@@ -90,61 +97,49 @@ The `--cursor` flag writes `.cursor/rules/multiclaude-orchestrator.mdc` with orc
 
 > **Note:** Ports 7432 (coord) and 7433 (web) are reserved for MultiClaude. Don't kill processes on these ports during agent tasks.
 
-## Test It Locally
+## Example Prompts
 
-### 1. Verify the connection
-```
-Call get_system_status to show me the current state of the coordination server.
-```
+These are the kinds of tasks you can give the orchestrator — plain natural language, no tool names needed. The orchestrator handles decomposition and coordination automatically.
 
-### 2. Plan a parallel DAG
+**Greenfield features:**
 ```
-Use plan_dag to break this epic into tasks:
-- Build a REST API with three endpoints: GET /users, POST /users, DELETE /users/:id
-- Each endpoint is independent and can be built in parallel
-- There should be a final integration task that depends on all three
+Build a REST API with auth and user management
 ```
-
-### 3. Plan with a dependency chain
 ```
-Use plan_dag to decompose this work:
-1. Set up a SQLite database schema
-2. Write a data access layer (depends on schema)
-3. Write unit tests for the data access layer (depends on schema)
-4. Build an API server (depends on data access layer)
-5. Write API integration tests (depends on API server and data access layer)
-
-Then call get_system_status and tell me which tasks are ready to start immediately.
+Add dark mode to the web UI
+```
+```
+Implement Redis caching for expensive database queries
 ```
 
-### 4. Simulate a full worker flow
+**Maintenance and migrations:**
 ```
-Use plan_dag to create two tasks: "Write a hello world function" and "Write tests for it"
-where tests depend on the function. Then use spawn_worker to assign the first task to
-agent "agent-001". Call get_system_status to confirm the assignment.
+Migrate Jest to Vitest and fix any broken tests
 ```
-
-### 5. Full end-to-end
 ```
-I want to build a small CLI tool that converts JSON to CSV. Please:
-1. Break it into parallel subtasks using plan_dag
-2. Show me get_system_status to confirm the DAG
-3. Dispatch workers to all ready tasks using spawn_worker
-4. Monitor with get_system_status and dispatch the next tasks as they complete
+Add pagination and filtering to all list endpoints
+```
+```
+Add OpenAPI/Swagger docs auto-generated from the route definitions
 ```
 
-### 6. Try the planning loop
+**Infrastructure and tooling:**
 ```
-Use plan_dag to break this feature into tasks:
-- Add a user login endpoint
-- Add a user logout endpoint
-- Add session middleware (depends on login and logout)
-- Write integration tests (depends on session middleware)
+Set up CI with GitHub Actions: lint, test, and build on every PR
+```
+```
+Add rate limiting and request logging middleware
+```
+```
+Write a load testing script and fix any bottlenecks found
+```
 
-Show me the ASCII DAG visualization, then I'll tell you whether to proceed or revise.
+**Open-ended:**
 ```
-The orchestrator will display the task graph and ask: **"Does this plan look good? Proceed / Revise"**
-If you choose Revise, describe what to change (e.g. "split the middleware task into two") and the orchestrator will regenerate the DAG and ask again. Once you choose Proceed, workers are spawned immediately.
+Work on all open GitHub issues and create PRs as you go
+```
+
+The orchestrator will break each of these into parallel tasks, show you the dependency graph, and ask for your approval before spawning any workers. You can revise the plan before it starts.
 
 ## Using Cursor Agent
 
