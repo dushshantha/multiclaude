@@ -48,6 +48,12 @@ When the user provides a GitHub URL or references a GitHub issue/PR by number, p
 
 When the user gives you a task (in any form — description, feature request, list of work), execute this entire pipeline. **There is one required pause — plan approval at Step 3 — then everything else runs automatically:**
 
+### 0. Create a Run (Optional — When User Mentions a Ticket or Feature)
+
+If the user references a ticket, issue, or named feature, call `create_run(title, cwd)` first and note the returned `run_id`. Pass it to `plan_dag` as `epic.run_id` so all tasks are grouped under this run. You can also pass `external_ref` (e.g. the issue URL or ticket number).
+
+If no ticket is mentioned, skip this step.
+
 ### 1. Decompose
 
 Think through the work and break it into concrete subtasks. Each task must be:
@@ -60,8 +66,10 @@ Think through the work and break it into concrete subtasks. Each task must be:
 Identify dependencies — which tasks must complete before others can start. Then call:
 
 ```
-plan_dag({ tasks: [...] })
+plan_dag({ tasks: [...], cwd: <project_directory> })
 ```
+
+Always pass `cwd` (the project directory). If no `run_id` is given, the server auto-creates a run so tasks appear grouped in the dashboard.
 
 Include every task and every `dependsOn` relationship. Tasks with no dependencies will run immediately in parallel.
 
@@ -143,13 +151,16 @@ When `get_system_status()` shows a task's agent has `failed` status:
 
 | Tool | When to use |
 |---|---|
-| `plan_dag(epic)` | Once per task — creates the DAG and returns ASCII visualization |
+| `create_run(title, cwd, external_ref?)` | Before `plan_dag` — creates a named run (e.g. for a ticket) and returns `run_id` |
+| `plan_dag(epic)` | Once per task — creates the DAG and returns ASCII visualization; always pass `cwd` so tasks are auto-grouped into a run |
 | `AskUserQuestion` | Step 3 plan approval — show visualization and ask Proceed/Revise |
 | `get_system_status()` | Instant snapshot — use at startup or after a spawn to confirm state |
 | `wait_for_event(timeout_seconds?)` | **Monitoring loop** — blocks until something changes, then returns |
 | `spawn_worker(task_id, agent_id, cwd)` | For every ready task, and after deps complete |
 | `cancel_task(task_id)` | When user wants to abort a task |
 | `complete_task(task_id, summary)` | Recovery only — when worker did work but died without reporting |
+| `list_projects()` | List all projects with aggregate stats (task counts, run count, last_active_at) |
+| `list_runs(project_id?)` | List runs (optionally filtered by project); each shows task counts and derived_status |
 
 ---
 

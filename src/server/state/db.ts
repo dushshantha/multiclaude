@@ -4,6 +4,23 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
   const db = new Database(path)
   db.pragma('journal_mode = WAL')
   db.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      cwd TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_active_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS runs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      title TEXT NOT NULL,
+      external_ref TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -19,6 +36,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
       input_tokens INTEGER,
       output_tokens INTEGER,
       total_tokens INTEGER,
+      run_id TEXT REFERENCES runs(id),
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -54,6 +72,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
   try { db.exec("ALTER TABLE tasks ADD COLUMN input_tokens INTEGER") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN output_tokens INTEGER") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN total_tokens INTEGER") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN run_id TEXT REFERENCES runs(id)") } catch { /* already exists */ }
   return db
 }
 

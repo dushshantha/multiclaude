@@ -2,7 +2,8 @@ import express from 'express'
 import { createServer } from 'http'
 import { randomUUID } from 'crypto'
 import { createDb } from './state/db.js'
-import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker, handleCompleteTask } from './tools/orchestrator.js'
+import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker, handleCompleteTask, handleCreateRun, handleListProjects, handleListRuns } from './tools/orchestrator.js'
+import { backfillProjectsFromAgents } from './state/projects.js'
 import { handleGetMyTask, handleReportProgress, handleReportDone, handleReportBlocked } from './tools/worker.js'
 import type Database from 'better-sqlite3'
 import type { Server } from 'http'
@@ -101,12 +102,17 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
           title: z.string(),
           description: z.string().optional(),
           dependsOn: z.array(z.string()),
-        }))
+        })),
+        run_id: z.string().optional(),
+        cwd: z.string().optional().describe('Project directory — pass this to auto-create a run when no run_id is given'),
       })
     },
     async ({ epic }) => {
-      const visualization = handlePlanDag(db, epic)
-      return { content: [{ type: 'text' as const, text: visualization }] }
+      const result = handlePlanDag(db, epic)
+      if ('error' in result) {
+        return { content: [{ type: 'text' as const, text: `ERROR: ${result.error}` }], isError: true }
+      }
+      return { content: [{ type: 'text' as const, text: result.visualization }] }
     }
   )
 
@@ -160,6 +166,36 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
     async ({ task_id, summary }) => {
       handleCompleteTask(db, task_id, summary)
       return { content: [{ type: 'text' as const, text: `Task ${task_id} marked as done` }] }
+    }
+  )
+
+  server.tool(
+    'create_run',
+    'Create a new run (a named grouping of tasks, e.g. for a ticket or feature). Pass cwd (the project directory) to auto-create or look up the project. Returns the run_id to pass to plan_dag.',
+    { title: z.string(), cwd: z.string(), external_ref: z.string().optional() },
+    async ({ title, cwd, external_ref }) => {
+      const result = handleCreateRun(db, title, cwd, external_ref)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] }
+    }
+  )
+
+  server.tool(
+    'list_projects',
+    'List all projects with aggregate stats: total/done/failed task counts, run count, and last_active_at.',
+    {},
+    async () => {
+      const projects = handleListProjects(db)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(projects, null, 2) }] }
+    }
+  )
+
+  server.tool(
+    'list_runs',
+    'List runs, optionally filtered by project_id. Each run includes task counts and a derived_status (open/active/done).',
+    { project_id: z.string().optional() },
+    async ({ project_id }) => {
+      const runs = handleListRuns(db, project_id)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(runs, null, 2) }] }
     }
   )
 
@@ -227,6 +263,7 @@ export async function startCoordServer(opts: CoordServerOptions = {}): Promise<{
 }> {
   const port = opts.port ?? 7432
   const db = createDb(opts.dbPath ?? './multiclaude.db')
+  backfillProjectsFromAgents(db)
   const app = express()
   // Do NOT add express.json() here — MCP Streamable HTTP transport reads the
   // raw request body itself (and may send ndjson batches that body-parser rejects).

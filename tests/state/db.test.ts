@@ -18,6 +18,8 @@ describe('db', () => {
       "SELECT name FROM sqlite_master WHERE type='table'"
     ).all() as { name: string }[]
     const names = tables.map(t => t.name)
+    expect(names).toContain('projects')
+    expect(names).toContain('runs')
     expect(names).toContain('tasks')
     expect(names).toContain('dag_edges')
     expect(names).toContain('agents')
@@ -35,5 +37,6 @@ describe('db', () => {
     expect(names).toContain('branch')
     expect(names).toContain('created_at')
     expect(names).toContain('updated_at')
+    expect(names).toContain('run_id')
   })
 })
