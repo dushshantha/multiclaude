@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MultiClaude — Run</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Courier New', monospace; background: #1a1a2e; color: #e0e0e0; padding: 24px; }
+    h1 { color: #7c83fd; margin-bottom: 4px; font-size: 24px; }
+    .subtitle { color: #555; font-size: 12px; margin-bottom: 8px; }
+    .nav { display: flex; gap: 16px; margin-bottom: 24px; align-items: center; flex-wrap: wrap; }
+    .nav a { color: #7c83fd; text-decoration: none; font-size: 13px; }
+    .nav a:hover { text-decoration: underline; }
+    .nav .sep { color: #444; }
+    .stats { display: flex; gap: 16px; margin-bottom: 24px; }
+    .stat { padding: 12px 20px; border-radius: 8px; background: #16213e; min-width: 100px; }
+    .stat .count { font-size: 28px; font-weight: bold; }
+    .stat .label { font-size: 12px; color: #888; margin-top: 4px; }
+    .stat.running .count { color: #7c83fd; }
+    .stat.done .count { color: #4ade80; }
+    .stat.failed .count { color: #f87171; }
+    .stat.pending .count { color: #888; }
+    .stat.tokens .count { color: #a78bfa; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; padding: 8px 12px; color: #666; font-size: 12px; border-bottom: 1px solid #2a2a4e; }
+    td { padding: 8px 12px; border-bottom: 1px solid #1e1e3a; font-size: 13px; vertical-align: top; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
+    .badge.pending { background: #2a2a4e; color: #888; }
+    .badge.in_progress { background: #1e1e5e; color: #7c83fd; }
+    .badge.done { background: #14532d; color: #4ade80; }
+    .badge.failed { background: #450a0a; color: #f87171; }
+    .badge.cancelled { background: #1a1a1a; color: #555; }
+    .retry { color: #fbbf24; font-size: 11px; }
+    .task-row { cursor: pointer; }
+    .task-row:hover td { background: #1e1e3a; }
+    td, th, .log-entry, .log-path { user-select: text; }
+    .log-row td { padding: 0; border-bottom: none; }
+    .log-panel {
+      display: none;
+      background: #0d0d1f;
+      border-left: 2px solid #2a2a4e;
+      padding: 10px 14px;
+      margin: 0;
+    }
+    .log-panel.open { display: block; }
+    .log-panel .log-path {
+      font-size: 11px; color: #555; margin-bottom: 8px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .log-panel .log-path span { color: #7c83fd; }
+    .log-panel .log-entries { max-height: 240px; overflow-y: auto; }
+    .log-entry { font-size: 12px; line-height: 1.5; color: #aaa; }
+    .log-entry .ts { color: #444; margin-right: 6px; }
+    .log-entry.warn { color: #fbbf24; }
+    .log-entry.done-msg { color: #4ade80; }
+    .log-panel .empty { color: #555; font-size: 12px; font-style: italic; }
+    .expand-hint { color: #555; font-size: 11px; margin-left: 6px; }
+    .tokens { color: #a78bfa; }
+    .duration { color: #94a3b8; }
+    .token-detail { font-size: 11px; color: #666; margin-top: 2px; }
+    .ext-ref a { color: #7c83fd; font-size: 12px; text-decoration: none; }
+    .ext-ref a:hover { text-decoration: underline; }
+    .ext-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 12px; background: #1e1e5e; color: #7c83fd; font-size: 12px; text-decoration: none; margin-top: 6px; }
+    .ext-badge:hover { background: #2a2a7e; }
+    .empty-state { color: #555; font-style: italic; padding: 24px 12px; }
+  </style>
+</head>
+<body>
+  <h1 id="run-title">Run</h1>
+  <div class="subtitle" id="run-ext-ref"></div>
+  <div class="nav">
+    <a href="/">Projects</a>
+    <span class="sep">·</span>
+    <a id="nav-project" href="/">...</a>
+    <span class="sep">·</span>
+    <span id="nav-run" style="color:#666">...</span>
+    <span class="sep">·</span>
+    <a href="/tasks">All Tasks</a>
+  </div>
+  <div class="stats">
+    <div class="stat running"><div class="count" id="running">0</div><div class="label">Running</div></div>
+    <div class="stat done"><div class="count" id="done">0</div><div class="label">Done</div></div>
+    <div class="stat failed"><div class="count" id="failed">0</div><div class="label">Failed</div></div>
+    <div class="stat pending"><div class="count" id="pending">0</div><div class="label">Pending</div></div>
+    <div class="stat tokens"><div class="count" id="total-tokens">0</div><div class="label">Tokens</div></div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Task</th>
+        <th>Status</th>
+        <th>Agent</th>
+        <th>Retries</th>
+        <th>Duration</th>
+        <th>Tokens</th>
+      </tr>
+    </thead>
+    <tbody id="tasks"></tbody>
+  </table>
+  <script>
+    const openPanels = new Set()
+    let latestData = null
+    let logsByTask = {}
+    let agentLogPaths = {}
+
+    function escapeHtml(str) {
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    }
+
+    function formatTime(ts) {
+      if (!ts) return ''
+      return ts.replace('T', ' ').slice(11, 19)
+    }
+
+    function formatDuration(seconds) {
+      if (seconds == null) return ''
+      const s = Math.floor(seconds)
+      if (s < 60) return `${s}s`
+      const m = Math.floor(s / 60)
+      const rem = s % 60
+      return rem > 0 ? `${m}m ${rem}s` : `${m}m`
+    }
+
+    function formatTokens(n) {
+      if (n == null || n === 0) return ''
+      if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
+      if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
+      return String(n)
+    }
+
+    function elapsedSeconds(startedAt) {
+      if (!startedAt) return null
+      const start = new Date(startedAt.replace(' ', 'T') + 'Z').getTime()
+      return (Date.now() - start) / 1000
+    }
+
+    function isUrl(str) {
+      try { new URL(str); return true } catch { return false }
+    }
+
+    function renderLogs(taskId) {
+      const logs = (logsByTask[taskId] || []).slice().reverse()
+      const task = latestData?.find(t => t.id === taskId)
+      const agentId = task?.agent_id
+      const logPath = agentId ? agentLogPaths[agentId] : null
+
+      const pathHtml = logPath
+        ? `<div class="log-path">Full output: <span>tail -f ${escapeHtml(logPath)}</span></div>`
+        : ''
+
+      const entriesHtml = logs.length === 0
+        ? '<div class="empty">No progress messages yet</div>'
+        : logs.map(l => {
+            const cls = l.message.startsWith('DONE') ? 'done-msg' : l.level === 'warn' ? 'warn' : ''
+            return `<div class="log-entry ${cls}"><span class="ts">${escapeHtml(formatTime(l.created_at))}</span>${escapeHtml(l.message)}</div>`
+          }).join('')
+
+      return `${pathHtml}<div class="log-entries">${entriesHtml}</div>`
+    }
+
+    function renderTasks(tasks) {
+      latestData = tasks
+      document.getElementById('running').textContent = tasks.filter(t => t.status === 'in_progress').length
+      document.getElementById('done').textContent = tasks.filter(t => t.status === 'done').length
+      document.getElementById('failed').textContent = tasks.filter(t => t.status === 'failed').length
+      document.getElementById('pending').textContent = tasks.filter(t => t.status === 'pending').length
+      const totalTok = tasks.reduce((sum, t) => sum + (t.total_tokens || 0), 0)
+      document.getElementById('total-tokens').textContent = formatTokens(totalTok) || '0'
+
+      const tbody = document.getElementById('tasks')
+      if (tasks.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No tasks in this run.</td></tr>'
+        return
+      }
+
+      const rows = tasks.map(t => {
+        const isOpen = openPanels.has(t.id)
+        const hasLogs = (logsByTask[t.id] || []).length > 0 || t.agent_id
+        const hint = hasLogs ? '<span class="expand-hint">▶ click to expand</span>' : ''
+        const durSecs = t.status === 'in_progress' ? elapsedSeconds(t.started_at) : t.duration_seconds
+        const durHtml = durSecs != null
+          ? `<span class="duration">${formatDuration(durSecs)}${t.status === 'in_progress' ? ' ▸' : ''}</span>`
+          : '-'
+        const tokHtml = t.total_tokens
+          ? `<span class="tokens">${formatTokens(t.total_tokens)}</span><div class="token-detail">${formatTokens(t.input_tokens)}↑ ${formatTokens(t.output_tokens)}↓</div>`
+          : '-'
+        return `
+          <tr class="task-row" onclick="togglePanel('${escapeHtml(t.id)}')">
+            <td>${escapeHtml(t.title)}${hint}</td>
+            <td><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span></td>
+            <td>${escapeHtml(t.agent_id || '-')}</td>
+            <td>${t.retry_count > 0 ? `<span class="retry">⚠ ${t.retry_count}/${t.max_retries}</span>` : '-'}</td>
+            <td>${durHtml}</td>
+            <td>${tokHtml}</td>
+          </tr>
+          <tr class="log-row" id="log-row-${escapeHtml(t.id)}">
+            <td colspan="6">
+              <div class="log-panel ${isOpen ? 'open' : ''}" id="log-panel-${escapeHtml(t.id)}">
+                ${isOpen ? renderLogs(t.id) : ''}
+              </div>
+            </td>
+          </tr>
+        `
+      }).join('')
+      tbody.innerHTML = rows
+    }
+
+    function togglePanel(taskId) {
+      if (window.getSelection && window.getSelection().toString()) return
+      if (openPanels.has(taskId)) {
+        openPanels.delete(taskId)
+      } else {
+        openPanels.add(taskId)
+      }
+      if (latestData) renderTasks(latestData)
+    }
+
+    function formatExtRef(ref) {
+      if (!isUrl(ref)) return { label: escapeHtml(ref), href: null }
+      try {
+        const url = new URL(ref)
+        if (url.hostname === 'github.com') {
+          const parts = url.pathname.split('/').filter(Boolean)
+          // parts: [owner, repo, 'issues'|'pull', number]
+          if (parts.length >= 4) {
+            const type = parts[2] === 'pull' ? 'PR' : parts[2] === 'issues' ? 'Issue' : parts[2]
+            return { label: `GitHub ${type} #${parts[3]} ↗`, href: escapeHtml(ref) }
+          }
+        }
+        return { label: `${escapeHtml(url.hostname)} ↗`, href: escapeHtml(ref) }
+      } catch {
+        return { label: escapeHtml(ref), href: null }
+      }
+    }
+
+    const runId = location.pathname.split('/').pop()
+
+    async function loadRunMeta() {
+      try {
+        const resp = await fetch(`/api/runs/${runId}`)
+        if (!resp.ok) { document.getElementById('run-title').textContent = 'Run not found'; return }
+        const { run } = await resp.json()
+        document.title = `MultiClaude — ${run.title}`
+        document.getElementById('run-title').textContent = run.title
+        document.getElementById('nav-run').textContent = run.title
+
+        if (run.external_ref) {
+          const extEl = document.getElementById('run-ext-ref')
+          const { label, href } = formatExtRef(run.external_ref)
+          if (href) {
+            extEl.innerHTML = `<a class="ext-badge" href="${href}" target="_blank">${label}</a>`
+          } else {
+            extEl.innerHTML = `<span class="ext-badge" style="background:#2a2a2e;color:#888">${label}</span>`
+          }
+        }
+
+        // Try to fetch project info for nav breadcrumb
+        if (run.project_id) {
+          try {
+            const pr = await fetch(`/api/projects/${run.project_id}`)
+            if (pr.ok) {
+              const { project } = await pr.json()
+              const navLink = document.getElementById('nav-project')
+              navLink.textContent = project.name
+              navLink.href = `/projects/${project.id}`
+            }
+          } catch {}
+        }
+      } catch (e) {
+        document.getElementById('run-title').textContent = 'Error loading run'
+      }
+    }
+
+    loadRunMeta()
+
+    // Use server-side run_id filter on SSE so only this run's tasks are streamed
+    const es = new EventSource(`/api/events?run_id=${encodeURIComponent(runId)}`)
+    es.onmessage = ({ data }) => {
+      const snapshot = JSON.parse(data)
+      logsByTask = snapshot.logsByTask || {}
+      agentLogPaths = snapshot.agentLogPaths || {}
+      const runTasks = snapshot.tasks || []
+      const prev = JSON.stringify(latestData)
+      if (prev !== JSON.stringify(runTasks)) {
+        renderTasks(runTasks)
+      }
+    }
+  </script>
+</body>
+</html>

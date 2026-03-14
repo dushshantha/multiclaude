@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MultiClaude — Project</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Courier New', monospace; background: #1a1a2e; color: #e0e0e0; padding: 24px; }
+    h1 { color: #7c83fd; margin-bottom: 4px; font-size: 24px; }
+    .subtitle { color: #555; font-size: 12px; margin-bottom: 8px; }
+    .nav { display: flex; gap: 16px; margin-bottom: 24px; align-items: center; }
+    .nav a { color: #7c83fd; text-decoration: none; font-size: 13px; }
+    .nav a:hover { text-decoration: underline; }
+    .nav .sep { color: #444; }
+    .stats { display: flex; gap: 16px; margin-bottom: 24px; }
+    .stat { padding: 12px 20px; border-radius: 8px; background: #16213e; min-width: 100px; }
+    .stat .count { font-size: 28px; font-weight: bold; }
+    .stat .label { font-size: 12px; color: #888; margin-top: 4px; }
+    .stat.runs .count { color: #7c83fd; }
+    .stat.done .count { color: #4ade80; }
+    .stat.failed .count { color: #f87171; }
+    .stat.tokens .count { color: #a78bfa; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; padding: 8px 12px; color: #666; font-size: 12px; border-bottom: 1px solid #2a2a4e; }
+    td { padding: 10px 12px; border-bottom: 1px solid #1e1e3a; font-size: 13px; vertical-align: middle; }
+    .run-row { cursor: pointer; }
+    .run-row:hover td { background: #1e1e3a; }
+    .run-title a { color: #e0e0e0; text-decoration: none; font-weight: bold; }
+    .run-title a:hover { color: #7c83fd; }
+    .ext-ref { margin-top: 4px; }
+    .ext-ref a { color: #7c83fd; font-size: 11px; text-decoration: none; }
+    .ext-ref a:hover { text-decoration: underline; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
+    .badge.in_progress { background: #1e1e5e; color: #7c83fd; }
+    .badge.done { background: #14532d; color: #4ade80; }
+    .badge.failed { background: #450a0a; color: #f87171; }
+    .badge.pending { background: #2a2a4e; color: #888; }
+    .badge.empty { background: #1a1a2e; color: #444; border: 1px solid #2a2a4e; }
+    .task-counts { font-size: 12px; color: #888; }
+    .task-counts .active { color: #7c83fd; }
+    .task-counts .done-c { color: #4ade80; }
+    .task-counts .failed-c { color: #f87171; }
+    .tokens { color: #a78bfa; }
+    .date-range { color: #888; font-size: 12px; }
+    .empty-state { color: #555; font-style: italic; padding: 24px 12px; }
+  </style>
+</head>
+<body>
+  <h1 id="project-name">Project</h1>
+  <div class="subtitle" id="project-cwd"></div>
+  <div class="nav">
+    <a href="/">Projects</a>
+    <span class="sep">·</span>
+    <span id="nav-project" style="color:#666">...</span>
+    <span class="sep">·</span>
+    <a href="/tasks">All Tasks</a>
+  </div>
+  <div class="stats">
+    <div class="stat runs"><div class="count" id="total-runs">0</div><div class="label">Runs</div></div>
+    <div class="stat done"><div class="count" id="total-done">0</div><div class="label">Done</div></div>
+    <div class="stat failed"><div class="count" id="total-failed">0</div><div class="label">Failed</div></div>
+    <div class="stat tokens"><div class="count" id="total-tokens">-</div><div class="label">Tokens</div></div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Run</th>
+        <th>Status</th>
+        <th>Tasks</th>
+        <th>Tokens</th>
+        <th>Date</th>
+      </tr>
+    </thead>
+    <tbody id="runs"></tbody>
+  </table>
+  <script>
+    function escapeHtml(str) {
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    }
+
+    function formatTokens(n) {
+      if (!n || n === 0) return '-'
+      if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
+      if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
+      return String(n)
+    }
+
+    function formatDate(ts) {
+      if (!ts) return '-'
+      return ts.replace('T', ' ').slice(0, 16)
+    }
+
+    function isUrl(str) {
+      try { new URL(str); return true } catch { return false }
+    }
+
+    const projectId = location.pathname.split('/').pop()
+
+    function render({ project, runs }) {
+      document.title = `MultiClaude — ${project.name}`
+      document.getElementById('project-name').textContent = project.name
+      document.getElementById('project-cwd').textContent = project.cwd
+      document.getElementById('nav-project').textContent = project.name
+
+      const totalDone = runs.filter(r => r.derived_status === 'done').length
+      const totalFailed = runs.filter(r => r.derived_status === 'failed').length
+      const totalTokens = runs.reduce((s, r) => s + (r.total_tokens || 0), 0)
+
+      document.getElementById('total-runs').textContent = runs.length
+      document.getElementById('total-done').textContent = totalDone
+      document.getElementById('total-failed').textContent = totalFailed
+      document.getElementById('total-tokens').textContent = formatTokens(totalTokens)
+
+      const tbody = document.getElementById('runs')
+      if (runs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No runs yet for this project.</td></tr>'
+        return
+      }
+
+      tbody.innerHTML = runs.map(r => {
+        const active = r.in_progress_tasks || 0
+        const done = r.done_tasks || 0
+        const failed = r.failed_tasks || 0
+        const total = r.total_tasks || 0
+
+        let taskHtml = `<span>${total} task${total !== 1 ? 's' : ''}</span>`
+        const parts = []
+        if (active > 0) parts.push(`<span class="active">${active} active</span>`)
+        if (done > 0) parts.push(`<span class="done-c">${done} done</span>`)
+        if (failed > 0) parts.push(`<span class="failed-c">${failed} failed</span>`)
+        if (parts.length > 0) taskHtml = parts.join(' · ')
+
+        const extRefHtml = r.external_ref
+          ? isUrl(r.external_ref)
+            ? `<div class="ext-ref"><a href="${escapeHtml(r.external_ref)}" target="_blank" onclick="event.stopPropagation()">${escapeHtml(r.external_ref)}</a></div>`
+            : `<div class="ext-ref" style="color:#666;font-size:11px">${escapeHtml(r.external_ref)}</div>`
+          : ''
+
+        return `
+          <tr class="run-row" onclick="window.location='/runs/${escapeHtml(r.id)}'">
+            <td>
+              <div class="run-title"><a href="/runs/${escapeHtml(r.id)}" onclick="event.stopPropagation()">${escapeHtml(r.title)}</a></div>
+              ${extRefHtml}
+            </td>
+            <td><span class="badge ${r.derived_status}">${r.derived_status.replace('_', ' ')}</span></td>
+            <td><div class="task-counts">${taskHtml}</div></td>
+            <td><span class="tokens">${formatTokens(r.total_tokens)}</span></td>
+            <td><span class="date-range">${formatDate(r.created_at)}</span></td>
+          </tr>
+        `
+      }).join('')
+    }
+
+    async function load() {
+      try {
+        const resp = await fetch(`/api/projects/${projectId}`)
+        if (!resp.ok) { document.getElementById('project-name').textContent = 'Project not found'; return }
+        render(await resp.json())
+      } catch (e) {
+        document.getElementById('project-name').textContent = 'Error loading project'
+      }
+    }
+
+    load()
+    // Refresh every 5s for live updates
+    setInterval(load, 5000)
+  </script>
+</body>
+</html>

@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url'
 import type Database from 'better-sqlite3'
 import { listTasks } from '../server/state/tasks.js'
 import { listAgents } from '../server/state/agents.js'
+import { listProjects, getProject } from '../server/state/projects.js'
+import { listRunsWithStats, getRun } from '../server/state/runs.js'
 import { workerLogPath } from '../spawner/index.js'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
@@ -36,21 +38,48 @@ function getSnapshot(db: Database.Database) {
   for (const agent of agents) {
     agentLogPaths[agent.id] = workerLogPath(agent.id)
   }
+  const projects = listProjects(db)
   return {
     tasks,
     agents,
     edges: db.prepare('SELECT * FROM dag_edges').all(),
     logsByTask,
     agentLogPaths,
+    projects,
   }
 }
 
 export function startWebServer(db: Database.Database, port = 3000): void {
   const app = express()
-  app.use(express.static(join(__dirname, 'public')))
 
+  // API routes first (before static middleware)
   app.get('/api/status', (_req, res) => {
     res.json(getSnapshot(db))
+  })
+
+  app.get('/api/projects', (_req, res) => {
+    res.json(listProjects(db))
+  })
+
+  app.get('/api/projects/:id', (req, res) => {
+    const project = getProject(db, req.params['id'])
+    if (!project) { res.status(404).json({ error: 'Not found' }); return }
+    const runs = listRunsWithStats(db, project.id)
+    res.json({ project, runs })
+  })
+
+  app.get('/api/runs/:id', (req, res) => {
+    const run = getRun(db, req.params['id'])
+    if (!run) { res.status(404).json({ error: 'Not found' }); return }
+    const tasks = listTasks(db).filter(t => (t as any).run_id === run.id)
+    res.json({ run, tasks })
+  })
+
+  app.get('/api/runs/:id/tasks', (req, res) => {
+    const run = getRun(db, req.params['id'])
+    if (!run) { res.status(404).json({ error: 'Not found' }); return }
+    const tasks = listTasks(db).filter(t => (t as any).run_id === run.id)
+    res.json(tasks)
   })
 
   // Logs endpoint: GET /api/logs?task_id=<id>&limit=<n>
@@ -76,14 +105,42 @@ export function startWebServer(db: Database.Database, port = 3000): void {
     res.setHeader('Connection', 'keep-alive')
     res.flushHeaders()
 
+    const runIdFilter = req.query['run_id'] as string | undefined
+
     const send = () => {
-      res.write(`data: ${JSON.stringify(getSnapshot(db))}\n\n`)
+      const snapshot = getSnapshot(db)
+      if (runIdFilter) {
+        const filtered = { ...snapshot, tasks: snapshot.tasks.filter((t: any) => t.run_id === runIdFilter) }
+        res.write(`data: ${JSON.stringify(filtered)}\n\n`)
+      } else {
+        res.write(`data: ${JSON.stringify(snapshot)}\n\n`)
+      }
     }
 
     send()
     const interval = setInterval(send, 1000)
     req.on('close', () => clearInterval(interval))
   })
+
+  // Page routes — serve HTML files from public/
+  app.get('/', (_req, res) => {
+    res.sendFile(join(__dirname, 'public', 'index.html'))
+  })
+
+  app.get('/tasks', (_req, res) => {
+    res.sendFile(join(__dirname, 'public', 'tasks.html'))
+  })
+
+  app.get('/projects/:id', (_req, res) => {
+    res.sendFile(join(__dirname, 'public', 'project.html'))
+  })
+
+  app.get('/runs/:id', (_req, res) => {
+    res.sendFile(join(__dirname, 'public', 'run.html'))
+  })
+
+  // Static files (CSS, JS, etc.) — after named routes
+  app.use(express.static(join(__dirname, 'public')))
 
   app.listen(port, () => {
     console.log(`MultiClaude Web UI: http://localhost:${port}`)

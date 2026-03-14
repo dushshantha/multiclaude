@@ -18,7 +18,9 @@ describe('orchestrator tools', () => {
         { id: 'c', title: 'OAuth Impl', dependsOn: ['a'] },
       ]
     }
-    const viz = handlePlanDag(db, epic)
+    const result = handlePlanDag(db, epic)
+    expect('visualization' in result).toBe(true)
+    const viz = (result as { visualization: string }).visualization
     const tasks = db.prepare('SELECT * FROM tasks').all() as { id: string }[]
     expect(tasks).toHaveLength(3)
     const edges = db.prepare('SELECT * FROM dag_edges').all() as { from_task: string; to_task: string }[]
