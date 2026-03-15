@@ -232,7 +232,10 @@ async function main() {
   const mcpTools = [
     'mcp__multiclaude-coord__cancel_task',
     'mcp__multiclaude-coord__complete_task',
+    'mcp__multiclaude-coord__create_run',
     'mcp__multiclaude-coord__get_system_status',
+    'mcp__multiclaude-coord__list_projects',
+    'mcp__multiclaude-coord__list_runs',
     'mcp__multiclaude-coord__plan_dag',
     'mcp__multiclaude-coord__spawn_worker',
     'mcp__multiclaude-coord__wait_for_event',
@@ -275,7 +278,10 @@ async function main() {
   const cursorCoordTools = [
     'mcp__multiclaude-coord__cancel_task',
     'mcp__multiclaude-coord__complete_task',
+    'mcp__multiclaude-coord__create_run',
     'mcp__multiclaude-coord__get_system_status',
+    'mcp__multiclaude-coord__list_projects',
+    'mcp__multiclaude-coord__list_runs',
     'mcp__multiclaude-coord__plan_dag',
     'mcp__multiclaude-coord__spawn_worker',
     'mcp__multiclaude-coord__wait_for_event',
