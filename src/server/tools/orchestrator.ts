@@ -32,7 +32,6 @@ export function handlePlanDag(
       return { error: `run_id '${run_id}' not found` }
     }
   } else if (epic.cwd) {
-    // Auto-create a run so tasks are always grouped and visible in the dashboard
     const name = path.basename(epic.cwd) || epic.cwd
     const project = upsertProject(db, { name, cwd: epic.cwd })
     const title = epic.tasks[0]?.title ?? 'Unnamed run'
@@ -96,15 +95,18 @@ function buildDagVisualization(epic: Epic): string {
   return lines.join('\n').trimEnd()
 }
 
-export function handleGetSystemStatus(db: Database.Database): {
+export interface SystemStatus {
   tasks: ReturnType<typeof listTasks>
   agents: ReturnType<typeof listAgents>
   readyTasks: ReturnType<typeof getReadyTasks>
   retriableTasks: ReturnType<typeof listTasks>
   runs: ReturnType<typeof listRunsWithStats>
-} {
-  const tasks = listTasks(db)
-  const retriableTasks = tasks.filter(t => t.status === 'failed' && t.retry_count < t.max_retries)
+}
+
+export function handleGetSystemStatus(db: Database.Database, includeDone = false): SystemStatus {
+  const allTasks = listTasks(db)
+  const tasks = includeDone ? allTasks : allTasks.filter(t => t.status !== 'done' && t.status !== 'failed' && t.status !== 'cancelled')
+  const retriableTasks = allTasks.filter(t => t.status === 'failed' && t.retry_count < t.max_retries)
   return {
     tasks,
     agents: listAgents(db),
@@ -116,13 +118,13 @@ export function handleGetSystemStatus(db: Database.Database): {
 
 /**
  * Block until any task status changes, then return full system status.
- * Polls the DB every second server-side. The orchestrator calls this once
- * per "wait" instead of hammering get_system_status() in a tight loop.
+ * Polls the DB every second server-side.
  */
 export async function handleWaitForEvent(
   db: Database.Database,
   timeoutSeconds = 30,
-): Promise<ReturnType<typeof handleGetSystemStatus>> {
+  includeDone = true,
+): Promise<SystemStatus> {
   const deadline = Date.now() + timeoutSeconds * 1000
   const snapshot = () =>
     JSON.stringify(listTasks(db).map(t => ({ id: t.id, status: t.status })))
@@ -133,7 +135,7 @@ export async function handleWaitForEvent(
     if (snapshot() !== initial) break
   }
 
-  return handleGetSystemStatus(db)
+  return handleGetSystemStatus(db, includeDone)
 }
 
 export function handleCancelTask(db: Database.Database, taskId: string): void {
@@ -151,7 +153,6 @@ export function handleCompleteTask(
   db.prepare(
     'INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)'
   ).run(taskId, 'info', `DONE (orchestrator override): ${summary}`)
-  // Mark the associated agent done too so the dashboard reflects correctly
   const task = getTask(db, taskId)
   if (task?.agent_id) {
     updateAgent(db, task.agent_id, { status: 'done' })
