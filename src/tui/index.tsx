@@ -1,10 +1,20 @@
 import React, { useState, useEffect } from 'react'
 import { render, Box, Text, useInput, useApp } from 'ink'
+import { exec } from 'child_process'
 import { listTasks } from '../server/state/tasks.js'
 import { listAgents } from '../server/state/agents.js'
 import { workerLogPath } from '../spawner/index.js'
 import type { Task } from '../server/state/tasks.js'
 import type Database from 'better-sqlite3'
+
+const WEB_DASHBOARD_URL = 'http://localhost:3000'
+
+function openBrowser(url: string): void {
+  const cmd = process.platform === 'win32' ? `start "" "${url}"` :
+    process.platform === 'darwin' ? `open "${url}"` :
+    `xdg-open "${url}"`
+  exec(cmd)
+}
 
 interface LatestLogRow {
   task_id: string
@@ -74,6 +84,7 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
 
   useInput((input) => {
     if (input === 'q') exit()
+    if (input === 'w') openBrowser(WEB_DASHBOARD_URL)
   })
 
   // suppress unused import warning
