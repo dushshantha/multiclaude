@@ -8,6 +8,7 @@ export interface Run {
   project_id: string
   title: string
   external_ref: string | null
+  budget_usd: number | null
   status: RunStatus
   created_at: string
 }
@@ -16,18 +17,20 @@ export interface CreateRunInput {
   project_id: string
   title: string
   external_ref?: string
+  budget_usd?: number
 }
 
 export function createRun(db: Database.Database, input: CreateRunInput): Run {
   const id = randomUUID()
   db.prepare(`
-    INSERT INTO runs (id, project_id, title, external_ref)
-    VALUES (@id, @project_id, @title, @external_ref)
+    INSERT INTO runs (id, project_id, title, external_ref, budget_usd)
+    VALUES (@id, @project_id, @title, @external_ref, @budget_usd)
   `).run({
     id,
     project_id: input.project_id,
     title: input.title,
     external_ref: input.external_ref ?? null,
+    budget_usd: input.budget_usd ?? null,
   })
   return db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as Run
 }
@@ -51,6 +54,7 @@ export interface RunWithStats extends Run {
   done_tasks: number
   failed_tasks: number
   total_tokens: number
+  total_cost_usd: number
   first_started_at: string | null
   last_updated_at: string | null
   derived_status: DerivedRunStatus
@@ -67,6 +71,7 @@ export function listRunsWithStats(db: Database.Database, project_id?: string): R
       COUNT(DISTINCT CASE WHEN t.status = 'done' THEN t.id END) AS done_tasks,
       COUNT(DISTINCT CASE WHEN t.status = 'failed' THEN t.id END) AS failed_tasks,
       COALESCE(SUM(t.total_tokens), 0) AS total_tokens,
+      COALESCE(SUM(t.cost_usd), 0) AS total_cost_usd,
       MIN(t.started_at) AS first_started_at,
       MAX(t.updated_at) AS last_updated_at
     FROM runs r

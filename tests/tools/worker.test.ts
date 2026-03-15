@@ -87,4 +87,24 @@ describe('worker tools', () => {
     const task = db.prepare("SELECT duration_seconds FROM tasks WHERE id = 'task-1'").get() as { duration_seconds: number }
     expect(task.duration_seconds).toBe(42.5)
   })
+
+  it('report_done computes cost_usd from token counts and model', () => {
+    handleReportDone(db, 'task-1', 'done', { input_tokens: 1_000_000, output_tokens: 1_000_000, model: 'sonnet' })
+    const task = db.prepare("SELECT cost_usd FROM tasks WHERE id = 'task-1'").get() as { cost_usd: number }
+    expect(task.cost_usd).toBeCloseTo(18.0) // $3/M input + $15/M output
+  })
+
+  it('report_done leaves cost_usd null when no token counts provided', () => {
+    handleReportDone(db, 'task-1', 'done')
+    const task = db.prepare("SELECT cost_usd FROM tasks WHERE id = 'task-1'").get() as { cost_usd: number | null }
+    expect(task.cost_usd).toBeNull()
+  })
+
+  it('report_done uses task model as fallback when no model option provided', () => {
+    updateTask(db, 'task-1', { status: 'in_progress' })
+    db.prepare("UPDATE tasks SET model = 'haiku' WHERE id = 'task-1'").run()
+    handleReportDone(db, 'task-1', 'done', { input_tokens: 1_000_000, output_tokens: 1_000_000 })
+    const task = db.prepare("SELECT cost_usd FROM tasks WHERE id = 'task-1'").get() as { cost_usd: number }
+    expect(task.cost_usd).toBeCloseTo(4.8) // haiku pricing
+  })
 })
