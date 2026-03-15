@@ -5,6 +5,8 @@ export type WorkerRuntime = 'claude' | 'cursor'
 
 export interface MultiClaudeConfig {
   workerRuntime: WorkerRuntime
+  stuckWarningMinutes?: number
+  stuckTimeoutMinutes?: number
 }
 
 const CONFIG_FILENAME = '.multiclaude.json'
