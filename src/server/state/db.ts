@@ -83,6 +83,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
   try { db.exec("ALTER TABLE tasks ADD COLUMN cost_usd REAL") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN ticket TEXT") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE runs ADD COLUMN budget_usd REAL") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN ticket TEXT") } catch { /* already exists */ }
   return db
 }
 
