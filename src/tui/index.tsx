@@ -4,6 +4,7 @@ import { exec } from 'child_process'
 import { listTasks } from '../server/state/tasks.js'
 import { listAgents } from '../server/state/agents.js'
 import { workerLogPath } from '../spawner/index.js'
+import { calculateCost } from '../server/cost.js'
 import type { Task } from '../server/state/tasks.js'
 import type Database from 'better-sqlite3'
 
@@ -49,6 +50,10 @@ function formatTokens(n: number): string {
   if (n < 1000) return `${n}`
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`
   return `${(n / 1_000_000).toFixed(1)}M`
+}
+
+function formatCost(cost: number): string {
+  return `$${cost.toFixed(2)}`
 }
 
 function getElapsedSeconds(startedAt: string): number {
@@ -109,6 +114,10 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
   const done = tasks.filter(t => t.status === 'done').length
   const failed = tasks.filter(t => t.status === 'failed').length
   const totalTokens = tasks.reduce((sum, t) => sum + (t.total_tokens ?? 0), 0)
+  const totalCost = tasks.reduce((sum, t) => {
+    if (t.input_tokens == null && t.output_tokens == null) return sum
+    return sum + calculateCost(t.input_tokens ?? 0, t.output_tokens ?? 0, 'sonnet')
+  }, 0)
 
   return (
     <Box flexDirection="column" padding={1}>
@@ -118,6 +127,7 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
         <Text color="green">✓ {done} done  </Text>
         {failed > 0 && <Text color="red">✗ {failed} failed  </Text>}
         {totalTokens > 0 && <Text dimColor>~{formatTokens(totalTokens)} tokens  </Text>}
+        {totalCost > 0 && <Text dimColor>{formatCost(totalCost)}  </Text>}
         <Text dimColor>[q]uit  [w] web logs</Text>
       </Box>
 
