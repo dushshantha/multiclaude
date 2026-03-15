@@ -66,7 +66,14 @@ Think through the work and break it into concrete subtasks. Each task must be:
 Identify dependencies — which tasks must complete before others can start. Then call:
 
 ```
-plan_dag({ tasks: [...], cwd: <project_directory> })
+plan_dag({
+  tasks: [
+    { id: "rename-fields", title: "Rename DB columns to camelCase", model: "haiku" },
+    { id: "implement-auth", title: "Implement OAuth2 login flow", model: "sonnet" },
+    { id: "design-schema", title: "Design multi-tenant data model", model: "opus", dependsOn: [] }
+  ],
+  cwd: "/path/to/project"
+})
 ```
 
 Always pass `cwd` (the project directory). If no `run_id` is given, the server auto-creates a run so tasks appear grouped in the dashboard.
@@ -138,6 +145,20 @@ When all tasks in a run are done, workers will have assembled the run integratio
      ```
 2. Share the PR URL with the user.
 3. **Do not merge** — the user must approve the PR before merging to main.
+
+---
+
+## Model Selection
+
+When planning tasks, assign the appropriate model tier based on complexity. Use the `model` field in each task:
+
+| Tier | Model | Use when |
+|------|-------|----------|
+| haiku | claude-haiku-4-5 | Mechanical tasks: reformatting files, renaming symbols, writing boilerplate, adding type annotations, updating config files, moving files, generating fixtures/mocks |
+| sonnet | claude-sonnet-4-6 | Standard development: implementing features, writing tests, fixing bugs, refactoring, code review **(DEFAULT)** |
+| opus | claude-opus-4-6 | High-stakes/high-complexity: architecture decisions, security-critical code, novel algorithm design, tasks where mistakes are expensive to undo |
+
+If no model is specified, workers default to **sonnet**.
 
 ---
 

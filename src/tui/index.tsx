@@ -153,6 +153,12 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
                 </Text>
                 <Text dimColor>{tokenStr.padEnd(8)}{' '}</Text>
                 <Text dimColor>{t.agent_id ?? '-'}</Text>
+                {t.model === 'haiku' && (
+                  <Text color="green">  [haiku]</Text>
+                )}
+                {t.model === 'opus' && (
+                  <Text color="magenta">  [opus]</Text>
+                )}
                 {stuck && <Text color="yellow">  ⏱ stuck</Text>}
                 {!stuck && t.retry_count > 0 && (
                   <Text color="yellow">  ⚠ retry {t.retry_count}/{t.max_retries}</Text>
