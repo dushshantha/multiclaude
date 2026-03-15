@@ -39,12 +39,11 @@ export async function handleReportDone(
     ? (Date.now() - new Date(task.started_at).getTime()) / 1000
     : undefined)
 
-  // Merge worktree branch into mc/integration if a worktree was created
+  // Merge worktree branch into mc/integration and remove worktree if one was created
   if (task?.worktree_path && task.branch) {
-    const projectRow = task.run_id
-      ? (db.prepare('SELECT p.cwd FROM projects p JOIN runs r ON r.project_id = p.id WHERE r.id = ?').get(task.run_id) as { cwd: string } | undefined)
-      : undefined
-    const projectCwd = projectRow?.cwd
+    const projectCwd = task.repo_path ?? (task.run_id
+      ? (db.prepare('SELECT p.cwd FROM projects p JOIN runs r ON r.project_id = p.id WHERE r.id = ?').get(task.run_id) as { cwd: string } | undefined)?.cwd
+      : undefined)
     if (projectCwd) {
       try {
         await ensureIntegrationBranch(projectCwd)

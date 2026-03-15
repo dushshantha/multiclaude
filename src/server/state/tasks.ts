@@ -12,6 +12,7 @@ export interface Task {
   max_retries: number
   worktree_path: string | null
   branch: string | null
+  repo_path: string | null
   agent_id: string | null
   started_at: string | null
   duration_seconds: number | null
@@ -36,6 +37,7 @@ export interface UpdateTaskInput {
   retry_count?: number
   worktree_path?: string
   branch?: string
+  repo_path?: string
   agent_id?: string
   started_at?: string
   duration_seconds?: number
@@ -70,6 +72,7 @@ export function updateTask(db: Database.Database, id: string, input: UpdateTaskI
   if (input.retry_count !== undefined) { sets.push('retry_count = @retry_count'); params.retry_count = input.retry_count }
   if (input.worktree_path !== undefined) { sets.push('worktree_path = @worktree_path'); params.worktree_path = input.worktree_path }
   if (input.branch !== undefined) { sets.push('branch = @branch'); params.branch = input.branch }
+  if (input.repo_path !== undefined) { sets.push('repo_path = @repo_path'); params.repo_path = input.repo_path }
   if (input.agent_id !== undefined) { sets.push('agent_id = @agent_id'); params.agent_id = input.agent_id }
   if (input.started_at !== undefined) { sets.push('started_at = @started_at'); params.started_at = input.started_at }
   if (input.duration_seconds !== undefined) { sets.push('duration_seconds = @duration_seconds'); params.duration_seconds = input.duration_seconds }
