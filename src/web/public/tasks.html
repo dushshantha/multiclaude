@@ -21,6 +21,7 @@
     .stat.failed .count { color: #f87171; }
     .stat.pending .count { color: #888; }
     .stat.tokens .count { color: #a78bfa; }
+    .stat.cost .count { color: #34d399; }
     table { width: 100%; border-collapse: collapse; }
     th { text-align: left; padding: 8px 12px; color: #666; font-size: 12px; border-bottom: 1px solid #2a2a4e; }
     td { padding: 8px 12px; border-bottom: 1px solid #1e1e3a; font-size: 13px; vertical-align: top; }
@@ -61,6 +62,7 @@
     .log-panel .empty { color: #555; font-size: 12px; font-style: italic; }
     .expand-hint { color: #555; font-size: 11px; margin-left: 6px; }
     .tokens { color: #a78bfa; }
+    .cost-val { color: #34d399; }
     .duration { color: #94a3b8; }
     .token-detail { font-size: 11px; color: #666; margin-top: 2px; }
   </style>
@@ -78,6 +80,7 @@
     <div class="stat failed"><div class="count" id="failed">0</div><div class="label">Failed</div></div>
     <div class="stat pending"><div class="count" id="pending">0</div><div class="label">Pending</div></div>
     <div class="stat tokens"><div class="count" id="total-tokens">0</div><div class="label">Tokens</div></div>
+    <div class="stat cost"><div class="count" id="total-cost">$0</div><div class="label">Cost</div></div>
   </div>
   <table>
     <thead>
@@ -89,6 +92,7 @@
         <th>Retries</th>
         <th>Duration</th>
         <th>Tokens</th>
+        <th>Cost</th>
       </tr>
     </thead>
     <tbody id="tasks"></tbody>
@@ -122,6 +126,13 @@
       if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
       if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
       return String(n)
+    }
+
+    function formatCost(usd) {
+      if (usd == null || usd === 0) return '-'
+      if (usd < 0.001) return '<$0.001'
+      if (usd < 1) return '$' + usd.toFixed(3)
+      return '$' + usd.toFixed(2)
     }
 
     function elapsedSeconds(startedAt) {
@@ -196,6 +207,8 @@
       document.getElementById('pending').textContent = tasks.filter(t => t.status === 'pending').length
       const totalTok = tasks.reduce((sum, t) => sum + (t.total_tokens || 0), 0)
       document.getElementById('total-tokens').textContent = formatTokens(totalTok) || '0'
+      const totalCost = tasks.reduce((sum, t) => sum + (t.cost_usd || 0), 0)
+      document.getElementById('total-cost').textContent = totalCost > 0 ? formatCost(totalCost) : '$0'
 
       const tbody = document.getElementById('tasks')
       const rows = tasks.map(t => {
@@ -210,6 +223,7 @@
           : '-'
         const modelKey = (t.model || '').toLowerCase().includes('haiku') ? 'haiku' : (t.model || '').toLowerCase().includes('opus') ? 'opus' : 'sonnet'
         const modelHtml = t.model ? `<span class="model-badge ${modelKey}">${escapeHtml(modelKey)}</span>` : '-'
+        const costHtml = t.cost_usd ? `<span class="cost-val">${formatCost(t.cost_usd)}</span>` : '-'
         return `
           <tr class="task-row" onclick="togglePanel('${escapeHtml(t.id)}')">
             <td>${escapeHtml(t.title)}${hint}</td>
@@ -219,6 +233,7 @@
             <td>${t.retry_count > 0 ? `<span class="retry">⚠ ${t.retry_count}/${t.max_retries}</span>` : '-'}</td>
             <td>${durHtml}</td>
             <td>${tokHtml}</td>
+            <td>${costHtml}</td>
           </tr>
           <tr class="log-row" id="log-row-${escapeHtml(t.id)}">
             <td colspan="7">
