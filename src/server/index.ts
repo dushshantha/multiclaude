@@ -173,9 +173,9 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
   server.tool(
     'create_run',
     'Create a new run (a named grouping of tasks, e.g. for a ticket or feature). Pass cwd (the project directory) to auto-create or look up the project. Returns the run_id to pass to plan_dag.',
-    { title: z.string(), cwd: z.string(), external_ref: z.string().optional() },
-    async ({ title, cwd, external_ref }) => {
-      const result = handleCreateRun(db, title, cwd, external_ref)
+    { title: z.string(), cwd: z.string(), external_ref: z.string().optional(), budget_usd: z.number().optional() },
+    async ({ title, cwd, external_ref, budget_usd }) => {
+      const result = handleCreateRun(db, title, cwd, external_ref, budget_usd)
       return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] }
     }
   )
