@@ -72,7 +72,11 @@ export function startWebServer(db: Database.Database, port = 3000): void {
     const run = getRun(db, req.params['id'])
     if (!run) { res.status(404).json({ error: 'Not found' }); return }
     const tasks = listTasks(db).filter(t => (t as any).run_id === run.id)
-    res.json({ run, tasks })
+    const taskIds = tasks.map(t => t.id)
+    const edges = taskIds.length > 0
+      ? db.prepare(`SELECT from_task, to_task FROM dag_edges WHERE from_task IN (${taskIds.map(() => '?').join(',')})`).all(...taskIds as string[])
+      : []
+    res.json({ run, tasks, edges })
   })
 
   app.get('/api/runs/:id/tasks', (req, res) => {
