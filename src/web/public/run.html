@@ -64,6 +64,9 @@
     .ext-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 12px; background: #1e1e5e; color: #7c83fd; font-size: 12px; text-decoration: none; margin-top: 6px; }
     .ext-badge:hover { background: #2a2a7e; }
     .empty-state { color: #555; font-style: italic; padding: 24px 12px; }
+    .dag-section { margin-bottom: 24px; }
+    .dag-section h2 { font-size: 13px; color: #555; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+    #dag-container { overflow: auto; background: #0d0d1f; border-radius: 8px; padding: 16px; max-height: 500px; }
   </style>
 </head>
 <body>
@@ -85,6 +88,10 @@
     <div class="stat pending"><div class="count" id="pending">0</div><div class="label">Pending</div></div>
     <div class="stat tokens"><div class="count" id="total-tokens">0</div><div class="label">Tokens</div></div>
   </div>
+  <div class="dag-section">
+    <h2>Task Graph</h2>
+    <div id="dag-container" style="display:none"></div>
+  </div>
   <table>
     <thead>
       <tr>
@@ -104,6 +111,7 @@
     const logStreams = new Map()
     let latestData = null
     let agentLogPaths = {}
+    let dagEdges = []
 
     function escapeHtml(str) {
       return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -190,6 +198,100 @@
         ? `<div class="log-path">Full output: <span>tail -f ${escapeHtml(logPath)}</span></div>`
         : ''
       return `${pathHtml}<div class="log-entries"><div class="empty">Loading logs…</div></div>`
+    }
+
+    function renderDag(tasks, edges) {
+      const container = document.getElementById('dag-container')
+      if (!tasks || tasks.length === 0) { container.style.display = 'none'; return }
+      container.style.display = 'block'
+
+      const taskById = {}
+      tasks.forEach(t => { taskById[t.id] = t })
+
+      // Build incoming-deps map: taskId -> [from_task_ids]
+      const inDeps = {}
+      tasks.forEach(t => { inDeps[t.id] = [] })
+      edges.forEach(e => {
+        if (inDeps[e.to_task] !== undefined && taskById[e.from_task]) {
+          inDeps[e.to_task].push(e.from_task)
+        }
+      })
+
+      // Compute topological level for each task
+      const levels = {}
+      const visiting = new Set()
+      function computeLevel(id) {
+        if (levels[id] !== undefined) return levels[id]
+        if (visiting.has(id)) { levels[id] = 0; return 0 } // cycle guard
+        visiting.add(id)
+        const deps = inDeps[id] || []
+        levels[id] = deps.length === 0 ? 0 : Math.max(...deps.map(d => computeLevel(d))) + 1
+        visiting.delete(id)
+        return levels[id]
+      }
+      tasks.forEach(t => computeLevel(t.id))
+
+      // Group tasks into waves by level
+      const maxLevel = Math.max(...tasks.map(t => levels[t.id]))
+      const waves = []
+      for (let i = 0; i <= maxLevel; i++) waves.push([])
+      tasks.forEach(t => waves[levels[t.id]].push(t))
+
+      // Layout constants
+      const NW = 180, NH = 50, HG = 72, VG = 14, M = 20
+
+      const svgW = M * 2 + waves.length * NW + (waves.length - 1) * HG
+      const maxWaveH = Math.max(...waves.map(w => w.length * NH + Math.max(0, w.length - 1) * VG))
+      const svgH = M * 2 + maxWaveH
+
+      // Compute node center positions
+      const pos = {}
+      waves.forEach((wave, wi) => {
+        const waveH = wave.length * NH + Math.max(0, wave.length - 1) * VG
+        const startY = M + (maxWaveH - waveH) / 2
+        wave.forEach((t, ti) => {
+          const x = M + wi * (NW + HG)
+          const y = startY + ti * (NH + VG)
+          pos[t.id] = { x, y, cx: x + NW / 2, cy: y + NH / 2 }
+        })
+      })
+
+      // Status style map
+      const SC = {
+        pending:     { fill: '#2a2a4e', stroke: '#555',    text: '#888' },
+        in_progress: { fill: '#1e1e5e', stroke: '#7c83fd', text: '#7c83fd' },
+        done:        { fill: '#14532d', stroke: '#4ade80', text: '#4ade80' },
+        failed:      { fill: '#450a0a', stroke: '#f87171', text: '#f87171' },
+        cancelled:   { fill: '#1c1c1c', stroke: '#444',    text: '#555' },
+      }
+
+      let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgW}" height="${svgH}" style="display:block">`
+      svg += `<defs><marker id="dag-arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#555"/></marker></defs>`
+
+      // Draw edges first (behind nodes)
+      edges.forEach(e => {
+        const s = pos[e.from_task], d = pos[e.to_task]
+        if (!s || !d) return
+        const x1 = s.x + NW, y1 = s.cy
+        const x2 = d.x, y2 = d.cy
+        const midX = (x1 + x2) / 2
+        svg += `<path d="M${x1},${y1} C${midX},${y1} ${midX},${y2} ${x2},${y2}" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#dag-arrow)"/>`
+      })
+
+      // Draw nodes
+      tasks.forEach(t => {
+        const p = pos[t.id]
+        if (!p) return
+        const c = SC[t.status] || SC.pending
+        const raw = t.title || t.id
+        const label = raw.length > 22 ? raw.slice(0, 21) + '\u2026' : raw
+        svg += `<rect x="${p.x}" y="${p.y}" width="${NW}" height="${NH}" rx="5" fill="${c.fill}" stroke="${c.stroke}" stroke-width="1.5"/>`
+        svg += `<text x="${p.cx}" y="${p.cy - 6}" text-anchor="middle" fill="${c.text}" font-family="'Courier New',monospace" font-size="11">${escapeHtml(label)}</text>`
+        svg += `<text x="${p.cx}" y="${p.cy + 11}" text-anchor="middle" fill="${c.text}" font-family="'Courier New',monospace" font-size="10" opacity="0.7">${t.status.replace('_', ' ')}</text>`
+      })
+
+      svg += '</svg>'
+      container.innerHTML = svg
     }
 
     function renderTasks(tasks) {
@@ -284,6 +386,8 @@
         const resp = await fetch(`/api/runs/${runId}`)
         if (!resp.ok) { document.getElementById('run-title').textContent = 'Run not found'; return }
         const { run } = await resp.json()
+        dagEdges = run.edges || []
+        if (latestData) renderDag(latestData, dagEdges)
         document.title = `MultiClaude — ${run.title}`
         document.getElementById('run-title').textContent = run.title
         document.getElementById('nav-run').textContent = run.title
@@ -326,6 +430,7 @@
       // Skip task-table re-render if only logs changed (live streams handle that)
       if (JSON.stringify(latestData) !== JSON.stringify(runTasks)) {
         renderTasks(runTasks)
+        renderDag(runTasks, dagEdges)
       }
     }
   </script>
