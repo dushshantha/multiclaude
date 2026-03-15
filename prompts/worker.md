@@ -21,8 +21,8 @@ You have access to the `multiclaude-coord` MCP server with worker-scoped tools.
 ## When Done
 
 - Run all tests. Ensure they pass.
+- Push your branch to origin: `git push origin <branch>` (the branch name is in the `branch` field from `get_my_task`).
 - Call `report_done(task_id, summary, input_tokens, output_tokens, total_tokens)` with a 1-2 sentence summary of what you built. Pass your approximate token usage if you have it (these are optional but help the orchestrator track costs).
-- Do NOT push branches — the orchestrator handles merging.
 
 ## When Blocked
 
@@ -36,4 +36,5 @@ You have access to the `multiclaude-coord` MCP server with worker-scoped tools.
 - Work only in your assigned worktree. Do not touch other branches.
 - Write tests before implementation (TDD).
 - Commit frequently with descriptive messages.
+- Commit and push your branch to origin when done. Do not merge into other branches.
 - Do not ask the user questions — you work autonomously. If truly ambiguous, document your assumption in a comment and proceed.
