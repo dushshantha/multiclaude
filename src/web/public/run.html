@@ -100,8 +100,9 @@
   </table>
   <script>
     const openPanels = new Set()
+    // Map of taskId -> EventSource for live log streams
+    const logStreams = new Map()
     let latestData = null
-    let logsByTask = {}
     let agentLogPaths = {}
 
     function escapeHtml(str) {
@@ -139,24 +140,56 @@
       try { new URL(str); return true } catch { return false }
     }
 
-    function renderLogs(taskId) {
-      const logs = (logsByTask[taskId] || []).slice().reverse()
-      const task = latestData?.find(t => t.id === taskId)
-      const agentId = task?.agent_id
-      const logPath = agentId ? agentLogPaths[agentId] : null
+    function makeLogEntryHtml(l) {
+      const cls = l.message.startsWith('DONE') ? 'done-msg' : l.level === 'warn' ? 'warn' : ''
+      return `<div class="log-entry ${cls}"><span class="ts">${escapeHtml(formatTime(l.created_at))}</span>${escapeHtml(l.message)}</div>`
+    }
 
+    function startLogStream(taskId) {
+      if (logStreams.has(taskId)) return
+      const panel = document.getElementById(`log-panel-${taskId}`)
+      if (!panel) return
+
+      const stream = new EventSource(`/api/logs/stream?task_id=${encodeURIComponent(taskId)}`)
+      logStreams.set(taskId, stream)
+
+      stream.onmessage = ({ data }) => {
+        const logs = JSON.parse(data)
+        if (!logs.length) return
+        const currentPanel = document.getElementById(`log-panel-${taskId}`)
+        const currentEntries = currentPanel?.querySelector('.log-entries')
+        if (!currentEntries) return
+
+        const empty = currentEntries.querySelector('.empty')
+        if (empty) empty.remove()
+
+        const wasAtBottom = currentEntries.scrollHeight - currentEntries.scrollTop <= currentEntries.clientHeight + 4
+        logs.forEach(l => {
+          currentEntries.insertAdjacentHTML('beforeend', makeLogEntryHtml(l))
+        })
+        if (wasAtBottom) currentEntries.scrollTop = currentEntries.scrollHeight
+      }
+
+      stream.onerror = () => {
+        // SSE will auto-reconnect; no action needed
+      }
+    }
+
+    function stopLogStream(taskId) {
+      const stream = logStreams.get(taskId)
+      if (stream) {
+        stream.close()
+        logStreams.delete(taskId)
+      }
+    }
+
+    function buildLogPanelSkeleton(taskId) {
+      const agentId = latestData?.find(t => t.id === taskId)?.agent_id
+      const logPath = agentId ? agentLogPaths[agentId] : null
       const pathHtml = logPath
         ? `<div class="log-path">Full output: <span>tail -f ${escapeHtml(logPath)}</span></div>`
         : ''
-
-      const entriesHtml = logs.length === 0
-        ? '<div class="empty">No progress messages yet</div>'
-        : logs.map(l => {
-            const cls = l.message.startsWith('DONE') ? 'done-msg' : l.level === 'warn' ? 'warn' : ''
-            return `<div class="log-entry ${cls}"><span class="ts">${escapeHtml(formatTime(l.created_at))}</span>${escapeHtml(l.message)}</div>`
-          }).join('')
-
-      return `${pathHtml}<div class="log-entries">${entriesHtml}</div>`
+      return `${pathHtml}<div class="log-entries"><div class="empty">Loading logs…</div></div>`
     }
 
     function renderTasks(tasks) {
@@ -176,8 +209,7 @@
 
       const rows = tasks.map(t => {
         const isOpen = openPanels.has(t.id)
-        const hasLogs = (logsByTask[t.id] || []).length > 0 || t.agent_id
-        const hint = hasLogs ? '<span class="expand-hint">▶ click to expand</span>' : ''
+        const hint = t.agent_id ? '<span class="expand-hint">▶ click to expand</span>' : ''
         const durSecs = t.status === 'in_progress' ? elapsedSeconds(t.started_at) : t.duration_seconds
         const durHtml = durSecs != null
           ? `<span class="duration">${formatDuration(durSecs)}${t.status === 'in_progress' ? ' ▸' : ''}</span>`
@@ -197,19 +229,30 @@
           <tr class="log-row" id="log-row-${escapeHtml(t.id)}">
             <td colspan="6">
               <div class="log-panel ${isOpen ? 'open' : ''}" id="log-panel-${escapeHtml(t.id)}">
-                ${isOpen ? renderLogs(t.id) : ''}
+                ${isOpen ? buildLogPanelSkeleton(t.id) : ''}
               </div>
             </td>
           </tr>
         `
       }).join('')
       tbody.innerHTML = rows
+
+      // Re-attach live streams for any open panels (DOM was rebuilt)
+      for (const taskId of openPanels) {
+        const stream = logStreams.get(taskId)
+        if (stream) {
+          stream.close()
+          logStreams.delete(taskId)
+        }
+        startLogStream(taskId)
+      }
     }
 
     function togglePanel(taskId) {
       if (window.getSelection && window.getSelection().toString()) return
       if (openPanels.has(taskId)) {
         openPanels.delete(taskId)
+        stopLogStream(taskId)
       } else {
         openPanels.add(taskId)
       }
@@ -278,11 +321,10 @@
     const es = new EventSource(`/api/events?run_id=${encodeURIComponent(runId)}`)
     es.onmessage = ({ data }) => {
       const snapshot = JSON.parse(data)
-      logsByTask = snapshot.logsByTask || {}
       agentLogPaths = snapshot.agentLogPaths || {}
       const runTasks = snapshot.tasks || []
-      const prev = JSON.stringify(latestData)
-      if (prev !== JSON.stringify(runTasks)) {
+      // Skip task-table re-render if only logs changed (live streams handle that)
+      if (JSON.stringify(latestData) !== JSON.stringify(runTasks)) {
         renderTasks(runTasks)
       }
     }
