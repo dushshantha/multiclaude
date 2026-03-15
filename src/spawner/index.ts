@@ -1,8 +1,11 @@
 import { spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
-import { writeFileSync, mkdirSync, openSync } from 'fs'
-import { join } from 'path'
+import { writeFileSync, mkdirSync, openSync, readFileSync, existsSync } from 'fs'
+import { join, dirname } from 'path'
 import { tmpdir } from 'os'
+import { fileURLToPath } from 'url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const MODEL_IDS: Record<string, string> = {
   haiku: 'claude-haiku-4-5-20251001',
@@ -46,15 +49,31 @@ export function buildWorkerEnv(agentId: string): NodeJS.ProcessEnv {
   return env
 }
 
+function loadWorkerPrompt(): string {
+  // Look for prompts/worker.md relative to dist/ or src/
+  const candidates = [
+    join(__dirname, '..', 'prompts', 'worker.md'),
+    join(__dirname, '..', '..', 'prompts', 'worker.md'),
+  ]
+  for (const p of candidates) {
+    if (existsSync(p)) return readFileSync(p, 'utf-8').trim()
+  }
+  // Fallback: minimal inline instructions if file not found
+  return [
+    'Your MCP server is "multiclaude-worker". Start by calling get_my_task with your agent_id to get full task context, then implement the task.',
+    'Use report_progress to send status updates at key checkpoints.',
+    'When complete, call report_done with a summary. If blocked, call report_blocked.',
+  ].join('\n')
+}
+
 export function buildWorkerArgs(cfg: SpawnConfig): string[] {
+  const workerInstructions = loadWorkerPrompt()
   const prompt = [
     `You are MultiClaude worker agent "${cfg.agentId}".`,
     `Your assigned task is: "${cfg.taskTitle}"`,
     cfg.taskDescription ? `\nDescription: ${cfg.taskDescription}` : '',
     `\n\nYour agent ID is: ${cfg.agentId}`,
-    '\nYour MCP server is "multiclaude-worker". Start by calling get_my_task with your agent_id to get full task context, then implement the task.',
-    '\nUse report_progress to send status updates at key checkpoints.',
-    '\nWhen complete, call report_done with a summary. If blocked, call report_blocked.',
+    `\n\n${workerInstructions}`,
   ].join('')
 
   // Use stream-json when not showing in a terminal window — the exit handler
