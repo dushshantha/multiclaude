@@ -115,10 +115,29 @@ After spawning, enter the monitoring loop using `wait_for_event()`. This tool **
 1. Call `wait_for_event()` — it returns when something changes (or after 30s timeout)
 2. If `readyTasks` has newly-unblocked tasks → spawn them, write one line: `"✓ X done. Spawning Y + Z."`
 3. If a task has `failed` status → see Failure Handling below
-4. If all tasks are `done` → write a final summary and stop
+4. If all tasks are `done` → proceed to Step 6 (Create PR)
 5. Otherwise → call `wait_for_event()` again immediately
 
 **Critical:** Keep looping within the same turn. **Never write "I'll check back shortly" or "Monitoring now…" and stop.** Only write text when something actionable happens. Workers take 1–5 minutes; `wait_for_event()` will return on its own when they finish.
+
+---
+
+### 6. Create PR — After All Tasks Complete
+
+When all tasks in a run are done, workers will have assembled the run integration branch `mc/run-{runId}`. Create one PR for the entire run:
+
+1. Use the GitHub MCP tool (`mcp__github__create_pull_request`) to open a PR:
+   - **head branch:** `mc/run-{runId}`
+   - **base branch:** `main`
+   - **title:** the run title (from `create_run`)
+   - **body:** list each completed task with its summary, e.g.:
+     ```
+     ## Tasks included
+     - **task-id-1**: summary from report_done
+     - **task-id-2**: summary from report_done
+     ```
+2. Share the PR URL with the user.
+3. **Do not merge** — the user must approve the PR before merging to main.
 
 ---
 
