@@ -7,6 +7,7 @@ export interface Task {
   title: string
   description: string | null
   status: TaskStatus
+  model: string
   retry_count: number
   max_retries: number
   worktree_path: string | null
@@ -25,6 +26,7 @@ export interface CreateTaskInput {
   id: string
   title: string
   description?: string
+  model?: string
   max_retries?: number
   run_id?: string
 }
@@ -44,12 +46,13 @@ export interface UpdateTaskInput {
 
 export function createTask(db: Database.Database, input: CreateTaskInput): void {
   db.prepare(`
-    INSERT INTO tasks (id, title, description, max_retries, run_id)
-    VALUES (@id, @title, @description, @max_retries, @run_id)
+    INSERT INTO tasks (id, title, description, model, max_retries, run_id)
+    VALUES (@id, @title, @description, @model, @max_retries, @run_id)
   `).run({
     id: input.id,
     title: input.title,
     description: input.description ?? null,
+    model: input.model ?? 'sonnet',
     max_retries: input.max_retries ?? 3,
     run_id: input.run_id ?? null,
   })

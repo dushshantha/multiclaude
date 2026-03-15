@@ -101,6 +101,7 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
           id: z.string(),
           title: z.string(),
           description: z.string().optional(),
+          model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Model to use for this task (default: sonnet)'),
           dependsOn: z.array(z.string()),
         })),
         run_id: z.string().optional(),
@@ -141,7 +142,7 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
     'Register a worker agent for a task. Returns an error if any DAG blockers are not done. Pass cwd (the directory to run the worker in).',
     { task_id: z.string(), agent_id: z.string(), pid: z.number().optional(), cwd: z.string().optional() },
     async ({ task_id, agent_id, pid, cwd }) => {
-      const result = handleSpawnWorker(db, task_id, agent_id, { pid, cwd })
+      const result = await handleSpawnWorker(db, task_id, agent_id, { pid, cwd })
       if (!result.ok) {
         return { content: [{ type: 'text' as const, text: `ERROR: ${result.error}` }], isError: true }
       }
@@ -238,7 +239,7 @@ function createWorkerMcp(db: Database.Database): McpServer {
       duration_seconds: z.number().optional(),
     },
     async ({ task_id, summary, input_tokens, output_tokens, total_tokens, duration_seconds }) => {
-      handleReportDone(db, task_id, summary, { input_tokens, output_tokens, total_tokens, duration_seconds })
+      await handleReportDone(db, task_id, summary, { input_tokens, output_tokens, total_tokens, duration_seconds })
       return { content: [{ type: 'text' as const, text: 'Task marked as done' }] }
     }
   )

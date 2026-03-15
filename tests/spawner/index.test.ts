@@ -88,6 +88,47 @@ describe('spawner', () => {
     expect(env['MULTICLAUDE_AGENT_ID']).toBe('w-task-1')
   })
 
+  it('buildWorkerArgs passes --model with correct model ID for sonnet (default)', () => {
+    const cfg: SpawnConfig = {
+      taskId: 'task-1',
+      taskTitle: 'Build JWT auth',
+      agentId: 'w-task-1',
+      worktreePath: '/tmp/mc-task-1',
+      mcpConfigPath: '/tmp/mc-worker-config.json',
+    }
+    const args = buildWorkerArgs(cfg)
+    expect(args).toContain('--model')
+    expect(args[args.indexOf('--model') + 1]).toBe('claude-sonnet-4-6')
+  })
+
+  it('buildWorkerArgs passes --model with correct model ID for haiku', () => {
+    const cfg: SpawnConfig = {
+      taskId: 'task-1',
+      taskTitle: 'Build JWT auth',
+      model: 'haiku',
+      agentId: 'w-task-1',
+      worktreePath: '/tmp/mc-task-1',
+      mcpConfigPath: '/tmp/mc-worker-config.json',
+    }
+    const args = buildWorkerArgs(cfg)
+    expect(args).toContain('--model')
+    expect(args[args.indexOf('--model') + 1]).toBe('claude-haiku-4-5-20251001')
+  })
+
+  it('buildWorkerArgs passes --model with correct model ID for opus', () => {
+    const cfg: SpawnConfig = {
+      taskId: 'task-1',
+      taskTitle: 'Build JWT auth',
+      model: 'opus',
+      agentId: 'w-task-1',
+      worktreePath: '/tmp/mc-task-1',
+      mcpConfigPath: '/tmp/mc-worker-config.json',
+    }
+    const args = buildWorkerArgs(cfg)
+    expect(args).toContain('--model')
+    expect(args[args.indexOf('--model') + 1]).toBe('claude-opus-4-6')
+  })
+
   it('buildWorkerEnv removes CLAUDECODE to prevent nested session error', () => {
     const orig = process.env['CLAUDECODE']
     process.env['CLAUDECODE'] = '1'

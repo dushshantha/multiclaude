@@ -26,6 +26,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
       title TEXT NOT NULL,
       description TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
+      model TEXT NOT NULL DEFAULT 'sonnet',
       retry_count INTEGER NOT NULL DEFAULT 0,
       max_retries INTEGER NOT NULL DEFAULT 3,
       worktree_path TEXT,
@@ -73,6 +74,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
   try { db.exec("ALTER TABLE tasks ADD COLUMN output_tokens INTEGER") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN total_tokens INTEGER") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN run_id TEXT REFERENCES runs(id)") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN model TEXT NOT NULL DEFAULT 'sonnet'") } catch { /* already exists */ }
   return db
 }
 
