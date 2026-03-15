@@ -4,7 +4,7 @@ import { createTask, listTasks, getTask, updateTask } from '../state/tasks.js'
 import { addEdge, getReadyTasks, getBlockers } from '../state/dag.js'
 import { listAgents, registerAgent, updateAgent } from '../state/agents.js'
 import { upsertProject, listProjects } from '../state/projects.js'
-import { createRun, getRun, listRunsWithStats } from '../state/runs.js'
+import { createRun, getRun, listRunsWithStats, RunWithStats } from '../state/runs.js'
 import { createWorktree } from '../../git/worktree.js'
 
 export interface EpicTask {
@@ -12,6 +12,7 @@ export interface EpicTask {
   title: string
   description?: string
   model?: string
+  ticket?: string
   dependsOn: string[]
 }
 
@@ -39,7 +40,7 @@ export function handlePlanDag(
     run_id = run.id
   }
   for (const t of epic.tasks) {
-    createTask(db, { id: t.id, title: t.title, description: t.description, model: t.model, run_id })
+    createTask(db, { id: t.id, title: t.title, description: t.description, model: t.model, run_id, ticket: t.ticket })
   }
   for (const t of epic.tasks) {
     for (const dep of t.dependsOn) {
