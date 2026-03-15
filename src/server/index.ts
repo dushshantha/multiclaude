@@ -118,20 +118,20 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
 
   server.tool(
     'get_system_status',
-    'Get full system status (instant snapshot)',
-    {},
-    async () => {
-      const status = handleGetSystemStatus(db)
+    'Get system status (instant snapshot). By default only returns active tasks (pending/in_progress) to keep responses small. Set include_done=true to also include done/failed tasks. Always includes active_count and done_count totals.',
+    { include_done: z.boolean().optional() },
+    async ({ include_done }) => {
+      const status = handleGetSystemStatus(db, include_done ?? false)
       return { content: [{ type: 'text' as const, text: JSON.stringify(status, null, 2) }] }
     }
   )
 
   server.tool(
     'wait_for_event',
-    'Block until any task status changes, then return full system status. Use this in the monitoring loop instead of repeatedly calling get_system_status — it waits server-side so you don\'t burn context spinning. Polls every 1s for up to timeout_seconds (default 30).',
-    { timeout_seconds: z.number().optional() },
-    async ({ timeout_seconds }) => {
-      const status = await handleWaitForEvent(db, timeout_seconds ?? 30)
+    'Block until any task status changes, then return system status. Use this in the monitoring loop instead of repeatedly calling get_system_status — it waits server-side so you don\'t burn context spinning. Polls every 1s for up to timeout_seconds (default 30). By default only returns active tasks; set include_done=true to also see done/failed tasks. Always includes active_count and done_count totals.',
+    { timeout_seconds: z.number().optional(), include_done: z.boolean().optional() },
+    async ({ timeout_seconds, include_done }) => {
+      const status = await handleWaitForEvent(db, timeout_seconds ?? 30, include_done ?? false)
       return { content: [{ type: 'text' as const, text: JSON.stringify(status, null, 2) }] }
     }
   )

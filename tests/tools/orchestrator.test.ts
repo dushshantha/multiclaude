@@ -54,6 +54,16 @@ describe('orchestrator tools', () => {
     expect(task.status).toBe('cancelled')
   })
 
+  it('get_system_status retriableTasks includes only failed tasks with retries remaining', () => {
+    db.prepare("INSERT INTO tasks (id, title, status, retry_count, max_retries) VALUES ('t1', 'Task 1', 'failed', 0, 3)").run()
+    db.prepare("INSERT INTO tasks (id, title, status, retry_count, max_retries) VALUES ('t2', 'Task 2', 'failed', 3, 3)").run()
+    db.prepare("INSERT INTO tasks (id, title, status, retry_count, max_retries) VALUES ('t3', 'Task 3', 'done', 0, 3)").run()
+    const status = handleGetSystemStatus(db, true)
+    expect(status).toHaveProperty('retriableTasks')
+    expect(status.retriableTasks).toHaveLength(1)
+    expect(status.retriableTasks[0].id).toBe('t1')
+  })
+
   it('spawn_worker succeeds when task has no blockers', () => {
     db.prepare("INSERT INTO tasks (id, title) VALUES ('t1', 'Task 1')").run()
     const result = handleSpawnWorker(db, 't1', 'w-t1', { cwd: '/tmp' })
@@ -91,7 +101,7 @@ describe('orchestrator tools', () => {
     }, 200)
 
     const start = Date.now()
-    const result = await handleWaitForEvent(db, 5)
+    const result = await handleWaitForEvent(db, 5, true) // include_done=true to see the completed task
     const elapsed = Date.now() - start
 
     expect(elapsed).toBeLessThan(2000) // resolved well before 5s timeout

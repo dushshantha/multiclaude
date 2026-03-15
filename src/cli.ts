@@ -5,8 +5,10 @@ import { startTui } from './tui/index.js'
 import { spawnWorker, writeWorkerMcpConfig, workerLogPath } from './spawner/index.js'
 import { spawnCursorWorker } from './spawner/cursor.js'
 import { openWorkerTerminal } from './spawner/terminal.js'
+import { removeWorktree } from './git/worktree.js'
 import { getTask, updateTask } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
+import { checkStuckWorkers } from './spawner/stuck-watcher.js'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
@@ -47,6 +49,8 @@ function startSpawnerWatcher(
   workerRuntime: WorkerRuntime = 'claude',
   serverPort: number = 7432,
   openTerminals: boolean = false,
+  stuckWarningMinutes: number = 10,
+  stuckTimeoutMinutes: number = 30,
 ): void {
   const launched = new Set<string>()
 
@@ -111,6 +115,18 @@ function startSpawnerWatcher(
             if (tokens.total_tokens !== undefined) {
               updateTask(db, agent.task_id, tokens)
             }
+            // Cleanup worktree if task completed successfully
+            const task = getTask(db, agent.task_id)
+            if (task?.status === 'done' && task.worktree_path && task.branch) {
+              const projectRow = task.run_id
+                ? (db.prepare('SELECT p.cwd FROM projects p JOIN runs r ON r.project_id = p.id WHERE r.id = ?').get(task.run_id) as { cwd: string } | undefined)
+                : undefined
+              if (projectRow?.cwd) {
+                removeWorktree(projectRow.cwd, { path: task.worktree_path, branch: task.branch, taskId: task.id }).catch(err => {
+                  console.error(`[spawner] Failed to remove worktree for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`)
+                })
+              }
+            }
           }
         })
       } else {
@@ -146,11 +162,30 @@ function startSpawnerWatcher(
             if (tokens.total_tokens !== undefined) {
               updateTask(db, agent.task_id, tokens)
             }
+            // Cleanup worktree if task completed successfully
+            const task = getTask(db, agent.task_id)
+            if (task?.status === 'done' && task.worktree_path && task.branch) {
+              const projectRow = task.run_id
+                ? (db.prepare('SELECT p.cwd FROM projects p JOIN runs r ON r.project_id = p.id WHERE r.id = ?').get(task.run_id) as { cwd: string } | undefined)
+                : undefined
+              if (projectRow?.cwd) {
+                removeWorktree(projectRow.cwd, { path: task.worktree_path, branch: task.branch, taskId: task.id }).catch(err => {
+                  console.error(`[spawner] Failed to remove worktree for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`)
+                })
+              }
+            }
           }
         })
       }
     }
   }, 1000)
+
+  // Stuck worker detection — runs every 60 seconds.
+  // Warns at stuckWarningMinutes, times out at stuckTimeoutMinutes.
+  const stuckSince = new Map<string, number>()
+  setInterval(() => {
+    checkStuckWorkers(db, stuckSince, stuckWarningMinutes, stuckTimeoutMinutes)
+  }, 60_000)
 }
 
 async function main() {
@@ -209,7 +244,11 @@ async function main() {
   const mcpConfigPath = writeWorkerMcpConfig(port)
 
   // Start watcher: polls DB for spawning agents and launches worker subprocesses
-  startSpawnerWatcher(db, mcpConfigPath, effectiveRuntime, port, openTerminals)
+  startSpawnerWatcher(
+    db, mcpConfigPath, effectiveRuntime, port, openTerminals,
+    multiclaudeConfig?.stuckWarningMinutes ?? 10,
+    multiclaudeConfig?.stuckTimeoutMinutes ?? 30,
+  )
 
   // Register multiclaude-coord in Claude Code's user config via `claude mcp add`.
   // Claude Code stores user-level MCP servers in ~/.claude.json — using the CLI

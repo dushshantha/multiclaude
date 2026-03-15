@@ -94,27 +94,44 @@ function buildDagVisualization(epic: Epic): string {
   return lines.join('\n').trimEnd()
 }
 
-export function handleGetSystemStatus(db: Database.Database): {
+export interface SystemStatus {
   tasks: ReturnType<typeof listTasks>
   agents: ReturnType<typeof listAgents>
   readyTasks: ReturnType<typeof getReadyTasks>
-} {
+  retriableTasks: ReturnType<typeof listTasks>
+  active_count: number
+  done_count: number
+}
+
+export function handleGetSystemStatus(
+  db: Database.Database,
+  includeDone = false,
+): SystemStatus {
+  const allTasks = listTasks(db)
+  const active_count = allTasks.filter(t => t.status !== 'done' && t.status !== 'failed').length
+  const done_count = allTasks.filter(t => t.status === 'done' || t.status === 'failed').length
+  const tasks = includeDone ? allTasks : allTasks.filter(t => t.status !== 'done' && t.status !== 'failed')
+  const retriableTasks = allTasks.filter(t => t.status === 'failed' && t.retry_count < t.max_retries)
   return {
-    tasks: listTasks(db),
+    tasks,
     agents: listAgents(db),
     readyTasks: getReadyTasks(db),
+    retriableTasks,
+    active_count,
+    done_count,
   }
 }
 
 /**
- * Block until any task status changes, then return full system status.
+ * Block until any task status changes, then return system status.
  * Polls the DB every second server-side. The orchestrator calls this once
  * per "wait" instead of hammering get_system_status() in a tight loop.
  */
 export async function handleWaitForEvent(
   db: Database.Database,
   timeoutSeconds = 30,
-): Promise<ReturnType<typeof handleGetSystemStatus>> {
+  includeDone = false,
+): Promise<SystemStatus> {
   const deadline = Date.now() + timeoutSeconds * 1000
   const snapshot = () =>
     JSON.stringify(listTasks(db).map(t => ({ id: t.id, status: t.status })))
@@ -125,7 +142,7 @@ export async function handleWaitForEvent(
     if (snapshot() !== initial) break
   }
 
-  return handleGetSystemStatus(db)
+  return handleGetSystemStatus(db, includeDone)
 }
 
 export function handleCancelTask(db: Database.Database, taskId: string): void {

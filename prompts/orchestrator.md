@@ -173,8 +173,8 @@ When `get_system_status()` shows a task's agent has `failed` status:
 | `create_run(title, cwd, external_ref?)` | Before `plan_dag` — creates a named run (e.g. for a ticket) and returns `run_id` |
 | `plan_dag(epic)` | Once per task — creates the DAG and returns ASCII visualization; always pass `cwd` so tasks are auto-grouped into a run |
 | `AskUserQuestion` | Step 3 plan approval — show visualization and ask Proceed/Revise |
-| `get_system_status()` | Instant snapshot — use at startup or after a spawn to confirm state |
-| `wait_for_event(timeout_seconds?)` | **Monitoring loop** — blocks until something changes, then returns |
+| `get_system_status(include_done?)` | Instant snapshot — returns only active tasks by default (include_done=true to see all); always includes active_count and done_count |
+| `wait_for_event(timeout_seconds?, include_done?)` | **Monitoring loop** — blocks until something changes, then returns active tasks by default; always includes active_count and done_count |
 | `spawn_worker(task_id, agent_id, cwd)` | For every ready task, and after deps complete |
 | `cancel_task(task_id)` | When user wants to abort a task |
 | `complete_task(task_id, summary)` | Recovery only — when worker did work but died without reporting |
