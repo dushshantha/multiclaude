@@ -54,12 +54,23 @@ describe('orchestrator tools', () => {
     expect(tasks.find(t => t.id === 'c')?.model).toBe('opus')
   })
 
-  it('get_system_status returns tasks, agents, and readyTasks', () => {
+  it('get_system_status returns tasks, agents, readyTasks, and retriableTasks', () => {
     const status = handleGetSystemStatus(db)
     expect(status).toHaveProperty('tasks')
     expect(status).toHaveProperty('agents')
     expect(status).toHaveProperty('readyTasks')
+    expect(status).toHaveProperty('retriableTasks')
     expect(Array.isArray(status.tasks)).toBe(true)
+    expect(Array.isArray(status.retriableTasks)).toBe(true)
+  })
+
+  it('get_system_status retriableTasks includes only failed tasks with retries remaining', () => {
+    db.prepare("INSERT INTO tasks (id, title, status, retry_count, max_retries) VALUES ('t1', 'Task 1', 'failed', 0, 3)").run()
+    db.prepare("INSERT INTO tasks (id, title, status, retry_count, max_retries) VALUES ('t2', 'Task 2', 'failed', 3, 3)").run()
+    db.prepare("INSERT INTO tasks (id, title, status, retry_count, max_retries) VALUES ('t3', 'Task 3', 'done', 0, 3)").run()
+    const status = handleGetSystemStatus(db)
+    expect(status.retriableTasks).toHaveLength(1)
+    expect(status.retriableTasks[0].id).toBe('t1')
   })
 
   it('cancel_task marks task as cancelled', () => {
