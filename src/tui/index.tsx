@@ -20,6 +20,7 @@ interface LatestLogRow {
   task_id: string
   message: string
   level: string
+  created_at: string
 }
 
 const STATUS_ICONS: Record<string, string> = {
@@ -54,9 +55,23 @@ function getElapsedSeconds(startedAt: string): number {
   return (Date.now() - new Date(startedAt + 'Z').getTime()) / 1000
 }
 
+function formatTimeAgo(createdAt: string): string {
+  const seconds = (Date.now() - new Date(createdAt + 'Z').getTime()) / 1000
+  if (seconds < 60) return `${Math.floor(seconds)}s ago`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  return `${Math.floor(seconds / 3600)}h ago`
+}
+
+function isStuck(task: Task, log: LatestLogRow | undefined): boolean {
+  if (!log) return false
+  if (task.status === 'in_progress' && log.message.includes('stuck warning')) return true
+  if (task.status === 'failed' && log.message.includes('no log activity')) return true
+  return false
+}
+
 // Query the most recent log message per task in a single pass.
 const LATEST_LOG_SQL = `
-  SELECT task_id, message, level
+  SELECT task_id, message, level, created_at
   FROM logs
   WHERE id IN (SELECT MAX(id) FROM logs WHERE task_id IS NOT NULL GROUP BY task_id)
 `
@@ -112,7 +127,8 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
           const icon = STATUS_ICONS[t.status] ?? '?'
           const color = STATUS_COLORS[t.status] ?? 'white'
           const log = latestLogs.get(t.id)
-          const logMsg = log?.message?.replace(/\n/g, ' ').slice(0, 55)
+          const logMsg = log?.message?.replace(/\n/g, ' ').slice(0, 45)
+          const stuck = isStuck(t, log)
 
           let timeStr = '--'
           if (t.status === 'in_progress' && t.started_at) {
@@ -137,14 +153,15 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
                 </Text>
                 <Text dimColor>{tokenStr.padEnd(8)}{' '}</Text>
                 <Text dimColor>{t.agent_id ?? '-'}</Text>
-                {t.retry_count > 0 && (
+                {stuck && <Text color="yellow">  ⏱ stuck</Text>}
+                {!stuck && t.retry_count > 0 && (
                   <Text color="yellow">  ⚠ retry {t.retry_count}/{t.max_retries}</Text>
                 )}
               </Box>
               {t.status === 'in_progress' && t.agent_id && (
                 <Box paddingLeft={3}>
                   {logMsg ? (
-                    <Text dimColor>↳ {logMsg}</Text>
+                    <Text dimColor>↳ {logMsg}{log?.created_at ? `  (last log ${formatTimeAgo(log.created_at)})` : ''}</Text>
                   ) : (
                     <Text dimColor>↳ tail -f {workerLogPath(t.agent_id)}</Text>
                   )}
