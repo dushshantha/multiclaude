@@ -21,19 +21,14 @@ You have access to the `multiclaude-coord` MCP server with worker-scoped tools.
 ## When Done
 
 1. Run all tests. Ensure they pass.
-2. Push your task branch:
+2. Push your task branch to origin:
    ```
-   git push -u origin mc/<taskId>
+   git push -u origin <task.branch>
    ```
-3. Merge into the run integration branch (replace `<taskId>` and `<runId>` with values from your `get_my_task` response):
-   ```
-   git fetch origin
-   git checkout mc/run-<runId> 2>/dev/null || git checkout -b mc/run-<runId> origin/mc/run-<runId> 2>/dev/null || git checkout -b mc/run-<runId> origin/main
-   git merge mc/<taskId> --no-edit
-   git push origin mc/run-<runId>
-   git checkout mc/<taskId>
-   ```
-4. Call `report_done(task_id, summary, input_tokens, output_tokens, total_tokens)` with a 1-2 sentence summary of what you built. Pass your approximate token usage if you have it (these are optional but help the orchestrator track costs).
+   (The `task.branch` value is returned by `get_my_task`.)
+3. Call `report_done(task_id, summary, input_tokens, output_tokens, total_tokens)` with a 1-2 sentence summary of what you built. Pass your approximate token usage if you have it (these are optional but help the orchestrator track costs).
+
+**The orchestration server automatically merges your task branch into the run integration branch when you call `report_done`.** Do not manually checkout or merge into `mc/run-<runId>` — the server handles this to prevent race conditions and double-merges.
 
 ## When Blocked
 
