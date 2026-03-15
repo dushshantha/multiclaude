@@ -114,7 +114,7 @@ After spawning, enter the monitoring loop using `wait_for_event()`. This tool **
 **The loop:**
 1. Call `wait_for_event()` — it returns when something changes (or after 30s timeout)
 2. If `readyTasks` has newly-unblocked tasks → spawn them, write one line: `"✓ X done. Spawning Y + Z."`
-3. If a task has `failed` status → see Failure Handling below
+3. If a task has `failed` status → the spawner watcher auto-retries (up to `max_retries`). You only need to escalate when `retry_count >= max_retries` — see Failure Handling below
 4. If all tasks are `done` → proceed to Step 6 (Create PR)
 5. Otherwise → call `wait_for_event()` again immediately
 
@@ -157,12 +157,11 @@ Workers take time — **patience is required.** A worker that hasn't reported pr
 
 ## Failure Handling
 
-When `get_system_status()` shows a task's agent has `failed` status:
+The spawner watcher **automatically retries** failed tasks up to `max_retries` times — you don't need to manually re-spawn. Only act when a task's `retry_count >= max_retries` (all retries exhausted):
 
 1. Check `logs` in the status output for error context
-2. If the failure is retryable (transient error, simple fix): call `spawn_worker` again with a new agent ID (e.g. `w-{task_id}-retry1`)
-3. If the failure needs user input: escalate with a brief summary of the error — don't dump the full log
-4. If the worker completed the work but failed to call `report_done` (rare): call `complete_task(task_id, summary)` as a manual override
+2. If the failure needs user input or a code fix: escalate with a brief summary of the error — don't dump the full log
+3. If the worker completed the work but failed to call `report_done` (rare): call `complete_task(task_id, summary)` as a manual override
 
 ---
 

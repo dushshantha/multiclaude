@@ -2,6 +2,8 @@ import type Database from 'better-sqlite3'
 import { getTask, updateTask } from '../state/tasks.js'
 import type { Task } from '../state/tasks.js'
 import { updateAgent } from '../state/agents.js'
+import { ensureIntegrationBranch, mergeWorktreeBranch } from '../../git/merge.js'
+import { removeWorktree } from '../../git/worktree.js'
 
 export function handleGetMyTask(db: Database.Database, agentId: string): Task {
   const task = db.prepare(
@@ -26,16 +28,43 @@ export function handleReportProgress(
   ).run(taskId, agentId, 'info', message)
 }
 
-export function handleReportDone(
+export async function handleReportDone(
   db: Database.Database,
   taskId: string,
   summary: string,
   opts: { input_tokens?: number; output_tokens?: number; total_tokens?: number; duration_seconds?: number } = {}
-): void {
+): Promise<void> {
   const task = getTask(db, taskId)
   const duration_seconds = opts.duration_seconds ?? (task?.started_at
     ? (Date.now() - new Date(task.started_at).getTime()) / 1000
     : undefined)
+
+  // Merge worktree branch into mc/integration if a worktree was created
+  if (task?.worktree_path && task.branch) {
+    const projectRow = task.run_id
+      ? (db.prepare('SELECT p.cwd FROM projects p JOIN runs r ON r.project_id = p.id WHERE r.id = ?').get(task.run_id) as { cwd: string } | undefined)
+      : undefined
+    const projectCwd = projectRow?.cwd
+    if (projectCwd) {
+      try {
+        await ensureIntegrationBranch(projectCwd)
+        await mergeWorktreeBranch(projectCwd, task.branch)
+        db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+          taskId, 'info', `Merged ${task.branch} into mc/integration`
+        )
+        await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch, taskId })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+          taskId, 'error', `Merge conflict: ${task.branch} could not be merged into mc/integration — ${msg}`
+        )
+        updateTask(db, taskId, { status: 'failed' })
+        if (task.agent_id) updateAgent(db, task.agent_id, { status: 'done' })
+        return
+      }
+    }
+  }
+
   updateTask(db, taskId, {
     status: 'done',
     duration_seconds,

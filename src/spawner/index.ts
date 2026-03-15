@@ -4,10 +4,17 @@ import { writeFileSync, mkdirSync, openSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
+const MODEL_IDS: Record<string, string> = {
+  haiku: 'claude-haiku-4-5-20251001',
+  sonnet: 'claude-sonnet-4-6',
+  opus: 'claude-opus-4-6',
+}
+
 export interface SpawnConfig {
   taskId: string
   taskTitle: string
   taskDescription?: string
+  model?: string
   agentId: string
   worktreePath: string
   mcpConfigPath: string
@@ -56,6 +63,9 @@ export function buildWorkerArgs(cfg: SpawnConfig): string[] {
   const outputFormat = cfg.openTerminals ? 'text' : 'stream-json'
   const extraFlags = cfg.openTerminals ? [] : ['--verbose']
 
+  const modelKey = cfg.model ?? 'sonnet'
+  const modelId = MODEL_IDS[modelKey] ?? MODEL_IDS.sonnet
+
   return [
     '--mcp-config', cfg.mcpConfigPath,
     '--allow-dangerously-skip-permissions',
@@ -63,6 +73,7 @@ export function buildWorkerArgs(cfg: SpawnConfig): string[] {
     '--print',
     ...extraFlags,
     '--output-format', outputFormat,
+    '--model', modelId,
     prompt,
   ]
 }
@@ -79,7 +90,7 @@ export function spawnWorker(cfg: SpawnConfig): ChildProcess {
   mkdirSync(claudeDir, { recursive: true })
   writeFileSync(
     join(claudeDir, 'settings.local.json'),
-    JSON.stringify({ permissions: { allow: 
+    JSON.stringify({ permissions: { allow:
       ['Bash(*)', 'Write(*)', 'Edit(*)', 'Read(*)',
         'mcp__multiclaude-worker__get_my_task',
         'mcp__multiclaude-worker__report_progress',

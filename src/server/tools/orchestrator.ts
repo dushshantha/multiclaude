@@ -11,7 +11,6 @@ export interface EpicTask {
   id: string
   title: string
   description?: string
-  model?: string
   dependsOn: string[]
 }
 
@@ -40,7 +39,7 @@ export function handlePlanDag(
     run_id = run.id
   }
   for (const t of epic.tasks) {
-    createTask(db, { id: t.id, title: t.title, description: t.description, model: t.model, run_id })
+    createTask(db, { id: t.id, title: t.title, description: t.description, run_id })
   }
   for (const t of epic.tasks) {
     for (const dep of t.dependsOn) {
@@ -210,19 +209,6 @@ export async function handleSpawnWorker(
   return { ok: true }
 }
 
-export interface RunWithStats {
-  id: string
-  project_id: string
-  title: string
-  external_ref: string | null
-  status: string
-  created_at: string
-  total_tasks: number
-  active_tasks: number
-  done_tasks: number
-  derived_status: 'open' | 'active' | 'done'
-}
-
 export function handleCreateRun(
   db: Database.Database,
   title: string,
@@ -241,23 +227,5 @@ export function handleListProjects(db: Database.Database) {
 }
 
 export function handleListRuns(db: Database.Database, project_id?: string): RunWithStats[] {
-  const whereClause = project_id ? 'WHERE r.project_id = ?' : ''
-  const args = project_id ? [project_id] : []
-  return db.prepare(`
-    SELECT
-      r.*,
-      COUNT(t.id) AS total_tasks,
-      COUNT(CASE WHEN t.status = 'in_progress' THEN 1 END) AS active_tasks,
-      COUNT(CASE WHEN t.status = 'done' THEN 1 END) AS done_tasks,
-      CASE
-        WHEN COUNT(t.id) > 0 AND COUNT(t.id) = COUNT(CASE WHEN t.status = 'done' THEN 1 END) THEN 'done'
-        WHEN COUNT(CASE WHEN t.status = 'in_progress' THEN 1 END) > 0 THEN 'active'
-        ELSE 'open'
-      END AS derived_status
-    FROM runs r
-    LEFT JOIN tasks t ON t.run_id = r.id
-    ${whereClause}
-    GROUP BY r.id
-    ORDER BY r.created_at DESC
-  `).all(...args) as RunWithStats[]
+  return listRunsWithStats(db, project_id)
 }
