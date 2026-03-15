@@ -103,6 +103,43 @@ export function startWebServer(db: Database.Database, port = 3000): void {
     res.json(rows.reverse())
   })
 
+  // Live log streaming: GET /api/logs/stream?task_id=<id>
+  app.get('/api/logs/stream', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.flushHeaders()
+
+    const taskId = req.query['task_id'] as string | undefined
+
+    // Send all existing logs as the initial batch
+    const existing: LogEntry[] = taskId
+      ? db.prepare('SELECT * FROM logs WHERE task_id = ? ORDER BY id ASC').all(taskId) as LogEntry[]
+      : db.prepare('SELECT * FROM logs ORDER BY id ASC').all() as LogEntry[]
+
+    let lastId = 0
+    if (existing.length > 0) {
+      res.write(`data: ${JSON.stringify(existing)}\n\n`)
+      lastId = existing[existing.length - 1].id
+    } else {
+      res.write(`data: []\n\n`)
+    }
+
+    // Poll for new entries every 500ms
+    const interval = setInterval(() => {
+      const newLogs: LogEntry[] = taskId
+        ? db.prepare('SELECT * FROM logs WHERE task_id = ? AND id > ? ORDER BY id ASC').all(taskId, lastId) as LogEntry[]
+        : db.prepare('SELECT * FROM logs WHERE id > ? ORDER BY id ASC').all(lastId) as LogEntry[]
+
+      if (newLogs.length > 0) {
+        res.write(`data: ${JSON.stringify(newLogs)}\n\n`)
+        lastId = newLogs[newLogs.length - 1].id
+      }
+    }, 500)
+
+    req.on('close', () => clearInterval(interval))
+  })
+
   app.get('/api/events', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream')
     res.setHeader('Cache-Control', 'no-cache')
