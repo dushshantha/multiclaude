@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { z } from 'zod'
 import { createDb, closeDb } from '../../src/server/state/db.js'
 import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker } from '../../src/server/tools/orchestrator.js'
 import { addEdge } from '../../src/server/state/dag.js'
@@ -156,6 +157,49 @@ describe('orchestrator tools', () => {
     expect(elapsed).toBeLessThan(2000)
     const task = db.prepare("SELECT status FROM tasks WHERE id = 't1'").get() as { status: string }
     expect(task.status).toBe('done')
+  })
+
+  // Zod schema mirroring index.ts plan_dag epic parameter with z.preprocess coercion
+  const epicSchema = z.preprocess(
+    (val) => typeof val === 'string' ? JSON.parse(val) : val,
+    z.object({
+      tasks: z.preprocess(
+        (val) => typeof val === 'string' ? JSON.parse(val) : val,
+        z.array(z.object({
+          id: z.string(),
+          title: z.string(),
+          description: z.string().optional(),
+          model: z.enum(['haiku', 'sonnet', 'opus']).optional(),
+          ticket: z.string().optional(),
+          dependsOn: z.array(z.string()),
+        }))
+      ),
+      run_id: z.string().optional(),
+      cwd: z.string().optional(),
+    })
+  )
+
+  it('plan_dag works when epic is a plain object', () => {
+    const epic = { tasks: [{ id: 'x1', title: 'Plain Task', dependsOn: [] }] }
+    const parsed = epicSchema.parse(epic)
+    const result = handlePlanDag(db, parsed)
+    expect('visualization' in result).toBe(true)
+  })
+
+  it('plan_dag works when epic is a JSON string', () => {
+    const epicStr = JSON.stringify({ tasks: [{ id: 'x2', title: 'String Epic Task', dependsOn: [] }] })
+    const parsed = epicSchema.parse(epicStr)
+    const result = handlePlanDag(db, parsed)
+    expect('visualization' in result).toBe(true)
+    expect((result as { visualization: string }).visualization).toContain('String Epic Task')
+  })
+
+  it('plan_dag works when tasks is a JSON string inside a valid epic object', () => {
+    const epic = { tasks: JSON.stringify([{ id: 'x3', title: 'String Tasks Task', dependsOn: [] }]) }
+    const parsed = epicSchema.parse(epic)
+    const result = handlePlanDag(db, parsed)
+    expect('visualization' in result).toBe(true)
+    expect((result as { visualization: string }).visualization).toContain('String Tasks Task')
   })
 
   it('wait_for_event returns after timeout when nothing changes', async () => {

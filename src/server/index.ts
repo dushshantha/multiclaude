@@ -96,18 +96,24 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
     'plan_dag',
     'Decompose epic into tasks with DAG dependencies',
     {
-      epic: z.object({
-        tasks: z.array(z.object({
-          id: z.string(),
-          title: z.string(),
-          description: z.string().optional(),
-          model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Model to use for this task (default: sonnet)'),
-          ticket: z.string().optional().describe('Ticket/issue identifier to group tasks in the web UI (e.g. "PROJ-123")'),
-          dependsOn: z.array(z.string()),
-        })),
-        run_id: z.string().optional(),
-        cwd: z.string().optional().describe('Project directory — pass this to auto-create a run when no run_id is given'),
-      })
+      epic: z.preprocess(
+        (val) => typeof val === 'string' ? JSON.parse(val) : val,
+        z.object({
+          tasks: z.preprocess(
+            (val) => typeof val === 'string' ? JSON.parse(val) : val,
+            z.array(z.object({
+              id: z.string(),
+              title: z.string(),
+              description: z.string().optional(),
+              model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Model to use for this task (default: sonnet)'),
+              ticket: z.string().optional().describe('Ticket/issue identifier to group tasks in the web UI (e.g. "PROJ-123")'),
+              dependsOn: z.array(z.string()),
+            }))
+          ),
+          run_id: z.string().optional(),
+          cwd: z.string().optional().describe('Project directory — pass this to auto-create a run when no run_id is given'),
+        })
+      )
     },
     async ({ epic }) => {
       const result = handlePlanDag(db, epic)
