@@ -70,6 +70,9 @@
     .ext-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 12px; background: #1e1e5e; color: #7c83fd; font-size: 12px; text-decoration: none; margin-top: 6px; }
     .ext-badge:hover { background: #2a2a7e; }
     .empty-state { color: #555; font-style: italic; padding: 24px 12px; }
+    .ticket-header td { background: #12122a; color: #7c83fd; font-size: 12px; font-weight: bold; padding: 6px 12px; border-bottom: 1px solid #2a2a4e; position: sticky; top: 0; z-index: 1; letter-spacing: 0.05em; text-transform: uppercase; }
+    .ticket-header .ticket-label { color: #a78bfa; margin-right: 8px; }
+    .ticket-header .ticket-count { color: #555; font-weight: normal; }
     .dag-section { margin-bottom: 24px; }
     .dag-section h2 { font-size: 13px; color: #555; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
     #dag-container { overflow: auto; background: #0d0d1f; border-radius: 8px; padding: 16px; max-height: 500px; }
@@ -328,11 +331,11 @@
 
       const tbody = document.getElementById('tasks')
       if (tasks.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No tasks in this run.</td></tr>'
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No tasks in this run.</td></tr>'
         return
       }
 
-      const rows = tasks.map(t => {
+      function renderTaskRow(t) {
         const isOpen = openPanels.has(t.id)
         const hint = t.agent_id ? '<span class="expand-hint">▶ click to expand</span>' : ''
         const durSecs = t.status === 'in_progress' ? elapsedSeconds(t.started_at) : t.duration_seconds
@@ -357,14 +360,45 @@
             <td>${costHtml}</td>
           </tr>
           <tr class="log-row" id="log-row-${escapeHtml(t.id)}">
-            <td colspan="7">
+            <td colspan="8">
               <div class="log-panel ${isOpen ? 'open' : ''}" id="log-panel-${escapeHtml(t.id)}">
                 ${isOpen ? buildLogPanelSkeleton(t.id) : ''}
               </div>
             </td>
           </tr>
         `
-      }).join('')
+      }
+
+      // Check if any tasks have a ticket field
+      const hasTickets = tasks.some(t => t.ticket)
+
+      let rows
+      if (!hasTickets) {
+        rows = tasks.map(renderTaskRow).join('')
+      } else {
+        // Group tasks by ticket; tasks without ticket go under null key
+        const groups = new Map()
+        for (const t of tasks) {
+          const key = t.ticket || null
+          if (!groups.has(key)) groups.set(key, [])
+          groups.get(key).push(t)
+        }
+
+        // Sort: named tickets first (alphabetically), then ungrouped last
+        const sortedKeys = [...groups.keys()].sort((a, b) => {
+          if (a === null) return 1
+          if (b === null) return -1
+          return a.localeCompare(b)
+        })
+
+        rows = sortedKeys.map(key => {
+          const groupTasks = groups.get(key)
+          const headerLabel = key ? escapeHtml(key) : 'Ungrouped'
+          const header = `<tr class="ticket-header"><td colspan="8"><span class="ticket-label">${headerLabel}</span><span class="ticket-count">${groupTasks.length} task${groupTasks.length === 1 ? '' : 's'}</span></td></tr>`
+          return header + groupTasks.map(renderTaskRow).join('')
+        }).join('')
+      }
+
       tbody.innerHTML = rows
 
       // Re-attach live streams for any open panels (DOM was rebuilt)
