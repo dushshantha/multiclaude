@@ -4,7 +4,7 @@ import { createTask, listTasks, getTask, updateTask } from '../state/tasks.js'
 import { addEdge, getReadyTasks, getBlockers } from '../state/dag.js'
 import { listAgents, registerAgent, updateAgent } from '../state/agents.js'
 import { upsertProject, listProjects } from '../state/projects.js'
-import { createRun, getRun, listRunsWithStats } from '../state/runs.js'
+import { createRun, getRun, listRunsWithStats, RunWithStats } from '../state/runs.js'
 import { createWorktree } from '../../git/worktree.js'
 
 export interface EpicTask {
