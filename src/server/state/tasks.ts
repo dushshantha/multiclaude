@@ -19,6 +19,8 @@ export interface Task {
   input_tokens: number | null
   output_tokens: number | null
   total_tokens: number | null
+  cost_usd: number | null
+  run_id: string | null
   created_at: string
   updated_at: string
 }
@@ -44,6 +46,7 @@ export interface UpdateTaskInput {
   input_tokens?: number
   output_tokens?: number
   total_tokens?: number
+  cost_usd?: number
 }
 
 export function createTask(db: Database.Database, input: CreateTaskInput): void {
@@ -79,6 +82,7 @@ export function updateTask(db: Database.Database, id: string, input: UpdateTaskI
   if (input.input_tokens !== undefined) { sets.push('input_tokens = @input_tokens'); params.input_tokens = input.input_tokens }
   if (input.output_tokens !== undefined) { sets.push('output_tokens = @output_tokens'); params.output_tokens = input.output_tokens }
   if (input.total_tokens !== undefined) { sets.push('total_tokens = @total_tokens'); params.total_tokens = input.total_tokens }
+  if (input.cost_usd !== undefined) { sets.push('cost_usd = @cost_usd'); params.cost_usd = input.cost_usd }
 
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = @id`).run(params as any)
 }

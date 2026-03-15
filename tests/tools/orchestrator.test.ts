@@ -123,6 +123,28 @@ describe('orchestrator tools', () => {
     expect(result.ok).toBe(true)
   })
 
+  it('spawn_worker blocks when run budget is exceeded', async () => {
+    // Create project and run with budget
+    db.prepare("INSERT INTO projects (id, name, cwd) VALUES ('p1', 'test', '/test')").run()
+    db.prepare("INSERT INTO runs (id, project_id, title, budget_usd) VALUES ('r1', 'p1', 'Test Run', 0.001)").run()
+    // Create a done task that already spent $0.002 (over budget)
+    db.prepare("INSERT INTO tasks (id, title, status, run_id, cost_usd) VALUES ('done-1', 'Done Task', 'done', 'r1', 0.002)").run()
+    // New task to spawn
+    db.prepare("INSERT INTO tasks (id, title, run_id) VALUES ('new-1', 'New Task', 'r1')").run()
+    const result = await handleSpawnWorker(db, 'new-1', 'w-new-1')
+    expect(result.ok).toBe(false)
+    expect((result as { ok: false; error: string }).error).toContain('budget')
+  })
+
+  it('spawn_worker proceeds when run has budget and cost is within limit', async () => {
+    db.prepare("INSERT INTO projects (id, name, cwd) VALUES ('p1', 'test', '/test')").run()
+    db.prepare("INSERT INTO runs (id, project_id, title, budget_usd) VALUES ('r1', 'p1', 'Test Run', 1.0)").run()
+    db.prepare("INSERT INTO tasks (id, title, status, run_id, cost_usd) VALUES ('done-1', 'Done Task', 'done', 'r1', 0.001)").run()
+    db.prepare("INSERT INTO tasks (id, title, run_id) VALUES ('new-1', 'New Task', 'r1')").run()
+    const result = await handleSpawnWorker(db, 'new-1', 'w-new-1')
+    expect(result.ok).toBe(true)
+  })
+
   it('wait_for_event returns immediately when status changes during wait', async () => {
     db.prepare("INSERT INTO tasks (id, title, status) VALUES ('t1', 'Task', 'pending')").run()
     setTimeout(() => {

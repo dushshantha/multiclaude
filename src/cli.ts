@@ -93,13 +93,14 @@ function startSpawnerWatcher(
       )
 
       // Register new agent and transition task to in_progress
-      const result = handleSpawnWorker(db, task.id, newAgentId, { cwd: prevAgent.cwd })
-      if (!result.ok) {
-        console.error(`[spawner] Failed to register retry worker for task ${task.id}: ${result.error}`)
-        // Revert so we can retry again on the next tick
-        updateTask(db, task.id, { retry_count: task.retry_count, status: 'failed' })
-        retried.delete(retryKey)
-      }
+      void handleSpawnWorker(db, task.id, newAgentId, { cwd: prevAgent.cwd }).then(result => {
+        if (!result.ok) {
+          console.error(`[spawner] Failed to register retry worker for task ${task.id}: ${result.error}`)
+          // Revert so we can retry again on the next tick
+          updateTask(db, task.id, { retry_count: task.retry_count, status: 'failed' })
+          retried.delete(retryKey)
+        }
+      })
     }
 
     const agents = db.prepare(

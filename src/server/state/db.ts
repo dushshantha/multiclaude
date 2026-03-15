@@ -17,6 +17,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
       project_id TEXT NOT NULL REFERENCES projects(id),
       title TEXT NOT NULL,
       external_ref TEXT,
+      budget_usd REAL,
       status TEXT NOT NULL DEFAULT 'open',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -38,6 +39,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
       output_tokens INTEGER,
       total_tokens INTEGER,
       repo_path TEXT,
+      cost_usd REAL,
       run_id TEXT REFERENCES runs(id),
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -77,6 +79,8 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
   try { db.exec("ALTER TABLE tasks ADD COLUMN run_id TEXT REFERENCES runs(id)") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN model TEXT NOT NULL DEFAULT 'sonnet'") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN repo_path TEXT") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN cost_usd REAL") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE runs ADD COLUMN budget_usd REAL") } catch { /* already exists */ }
   return db
 }
 

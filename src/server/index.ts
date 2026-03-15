@@ -237,9 +237,10 @@ function createWorkerMcp(db: Database.Database): McpServer {
       output_tokens: z.number().optional(),
       total_tokens: z.number().optional(),
       duration_seconds: z.number().optional(),
+      model: z.string().optional(),
     },
-    async ({ task_id, summary, input_tokens, output_tokens, total_tokens, duration_seconds }) => {
-      await handleReportDone(db, task_id, summary, { input_tokens, output_tokens, total_tokens, duration_seconds })
+    async ({ task_id, summary, input_tokens, output_tokens, total_tokens, duration_seconds, model }) => {
+      await handleReportDone(db, task_id, summary, { input_tokens, output_tokens, total_tokens, duration_seconds, model })
       return { content: [{ type: 'text' as const, text: 'Task marked as done' }] }
     }
   )

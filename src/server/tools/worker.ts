@@ -4,6 +4,7 @@ import type { Task } from '../state/tasks.js'
 import { updateAgent } from '../state/agents.js'
 import { ensureIntegrationBranch, mergeWorktreeBranch } from '../../git/merge.js'
 import { removeWorktree } from '../../git/worktree.js'
+import { calculateCost } from '../cost.js'
 
 export function handleGetMyTask(db: Database.Database, agentId: string): Task {
   const task = db.prepare(
@@ -32,12 +33,17 @@ export async function handleReportDone(
   db: Database.Database,
   taskId: string,
   summary: string,
-  opts: { input_tokens?: number; output_tokens?: number; total_tokens?: number; duration_seconds?: number } = {}
+  opts: { input_tokens?: number; output_tokens?: number; total_tokens?: number; duration_seconds?: number; model?: string } = {}
 ): Promise<void> {
   const task = getTask(db, taskId)
   const duration_seconds = opts.duration_seconds ?? (task?.started_at
     ? (Date.now() - new Date(task.started_at).getTime()) / 1000
     : undefined)
+
+  const model = opts.model ?? task?.model ?? 'sonnet'
+  const cost_usd = (opts.input_tokens != null && opts.output_tokens != null)
+    ? calculateCost(opts.input_tokens, opts.output_tokens, model)
+    : undefined
 
   // Merge worktree branch into mc/integration and remove worktree if one was created
   if (task?.worktree_path && task.branch) {
@@ -63,13 +69,13 @@ export async function handleReportDone(
       }
     }
   }
-
   updateTask(db, taskId, {
     status: 'done',
     duration_seconds,
     input_tokens: opts.input_tokens,
     output_tokens: opts.output_tokens,
     total_tokens: opts.total_tokens,
+    cost_usd,
   })
   db.prepare(
     'INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)'
