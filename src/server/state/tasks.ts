@@ -21,6 +21,7 @@ export interface Task {
   total_tokens: number | null
   cost_usd: number | null
   run_id: string | null
+  ticket: string | null
   created_at: string
   updated_at: string
 }
@@ -32,6 +33,7 @@ export interface CreateTaskInput {
   model?: string
   max_retries?: number
   run_id?: string
+  ticket?: string
 }
 
 export interface UpdateTaskInput {
@@ -51,8 +53,8 @@ export interface UpdateTaskInput {
 
 export function createTask(db: Database.Database, input: CreateTaskInput): void {
   db.prepare(`
-    INSERT INTO tasks (id, title, description, model, max_retries, run_id)
-    VALUES (@id, @title, @description, @model, @max_retries, @run_id)
+    INSERT INTO tasks (id, title, description, model, max_retries, run_id, ticket)
+    VALUES (@id, @title, @description, @model, @max_retries, @run_id, @ticket)
   `).run({
     id: input.id,
     title: input.title,
@@ -60,6 +62,7 @@ export function createTask(db: Database.Database, input: CreateTaskInput): void 
     model: input.model ?? 'sonnet',
     max_retries: input.max_retries ?? 3,
     run_id: input.run_id ?? null,
+    ticket: input.ticket ?? null,
   })
 }
 

@@ -102,6 +102,7 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
           title: z.string(),
           description: z.string().optional(),
           model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Model to use for this task (default: sonnet)'),
+          ticket: z.string().optional().describe('Optional ticket/issue reference (e.g. GitHub URL or issue number)'),
           dependsOn: z.array(z.string()),
         })),
         run_id: z.string().optional(),
