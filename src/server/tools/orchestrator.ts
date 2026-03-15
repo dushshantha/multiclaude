@@ -4,12 +4,14 @@ import { createTask, listTasks, getTask, updateTask } from '../state/tasks.js'
 import { addEdge, getReadyTasks, getBlockers } from '../state/dag.js'
 import { listAgents, registerAgent, updateAgent } from '../state/agents.js'
 import { upsertProject, listProjects } from '../state/projects.js'
-import { createRun, getRun } from '../state/runs.js'
+import { createRun, getRun, listRunsWithStats } from '../state/runs.js'
+import { createWorktree } from '../../git/worktree.js'
 
 export interface EpicTask {
   id: string
   title: string
   description?: string
+  model?: string
   dependsOn: string[]
 }
 
@@ -38,7 +40,7 @@ export function handlePlanDag(
     run_id = run.id
   }
   for (const t of epic.tasks) {
-    createTask(db, { id: t.id, title: t.title, description: t.description, run_id })
+    createTask(db, { id: t.id, title: t.title, description: t.description, model: t.model, run_id })
   }
   for (const t of epic.tasks) {
     for (const dep of t.dependsOn) {
@@ -94,44 +96,33 @@ function buildDagVisualization(epic: Epic): string {
   return lines.join('\n').trimEnd()
 }
 
-export interface SystemStatus {
+export function handleGetSystemStatus(db: Database.Database): {
   tasks: ReturnType<typeof listTasks>
   agents: ReturnType<typeof listAgents>
   readyTasks: ReturnType<typeof getReadyTasks>
   retriableTasks: ReturnType<typeof listTasks>
-  active_count: number
-  done_count: number
-}
-
-export function handleGetSystemStatus(
-  db: Database.Database,
-  includeDone = false,
-): SystemStatus {
-  const allTasks = listTasks(db)
-  const active_count = allTasks.filter(t => t.status !== 'done' && t.status !== 'failed').length
-  const done_count = allTasks.filter(t => t.status === 'done' || t.status === 'failed').length
-  const tasks = includeDone ? allTasks : allTasks.filter(t => t.status !== 'done' && t.status !== 'failed')
-  const retriableTasks = allTasks.filter(t => t.status === 'failed' && t.retry_count < t.max_retries)
+  runs: ReturnType<typeof listRunsWithStats>
+} {
+  const tasks = listTasks(db)
+  const retriableTasks = tasks.filter(t => t.status === 'failed' && t.retry_count < t.max_retries)
   return {
     tasks,
     agents: listAgents(db),
     readyTasks: getReadyTasks(db),
     retriableTasks,
-    active_count,
-    done_count,
+    runs: listRunsWithStats(db),
   }
 }
 
 /**
- * Block until any task status changes, then return system status.
+ * Block until any task status changes, then return full system status.
  * Polls the DB every second server-side. The orchestrator calls this once
  * per "wait" instead of hammering get_system_status() in a tight loop.
  */
 export async function handleWaitForEvent(
   db: Database.Database,
   timeoutSeconds = 30,
-  includeDone = false,
-): Promise<SystemStatus> {
+): Promise<ReturnType<typeof handleGetSystemStatus>> {
   const deadline = Date.now() + timeoutSeconds * 1000
   const snapshot = () =>
     JSON.stringify(listTasks(db).map(t => ({ id: t.id, status: t.status })))
@@ -142,7 +133,7 @@ export async function handleWaitForEvent(
     if (snapshot() !== initial) break
   }
 
-  return handleGetSystemStatus(db, includeDone)
+  return handleGetSystemStatus(db)
 }
 
 export function handleCancelTask(db: Database.Database, taskId: string): void {
@@ -167,12 +158,12 @@ export function handleCompleteTask(
   }
 }
 
-export function handleSpawnWorker(
+export async function handleSpawnWorker(
   db: Database.Database,
   taskId: string,
   agentId: string,
   opts: { pid?: number; cwd?: string } = {}
-): { ok: true } | { ok: false; error: string } {
+): Promise<{ ok: true } | { ok: false; error: string }> {
   // DAG guard: all upstream blockers must be 'done'
   const blockers = getBlockers(db, taskId)
   const notDone = blockers.filter(blockerId => {
@@ -186,10 +177,35 @@ export function handleSpawnWorker(
     }
   }
 
+  // Budget guard: if the run has a budget, check cumulative cost
+  const task = getTask(db, taskId)
+  if (task?.run_id) {
+    const run = getRun(db, task.run_id)
+    if (run?.budget_usd != null) {
+      const runStats = listRunsWithStats(db).find(r => r.id === task.run_id)
+      if (runStats && runStats.total_cost_usd >= run.budget_usd) {
+        return {
+          ok: false,
+          error: `Cannot spawn task ${taskId}: run budget of $${run.budget_usd.toFixed(4)} exceeded (current spend: $${runStats.total_cost_usd.toFixed(4)})`,
+        }
+      }
+    }
+  }
+
+  let agentCwd = opts.cwd
   if (opts.cwd) {
     upsertProject(db, { name: path.basename(opts.cwd), cwd: opts.cwd })
+    try {
+      const info = await createWorktree(opts.cwd, taskId)
+      updateTask(db, taskId, { worktree_path: info.path, branch: info.branch })
+      agentCwd = info.path
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      updateTask(db, taskId, { status: 'failed' })
+      return { ok: false, error: `Failed to create worktree for task ${taskId}: ${msg}` }
+    }
   }
-  registerAgent(db, { id: agentId, task_id: taskId, pid: opts.pid, cwd: opts.cwd })
+  registerAgent(db, { id: agentId, task_id: taskId, pid: opts.pid, cwd: agentCwd })
   updateTask(db, taskId, { status: 'in_progress', agent_id: agentId, started_at: new Date().toISOString() })
   return { ok: true }
 }
@@ -212,10 +228,11 @@ export function handleCreateRun(
   title: string,
   cwd: string,
   external_ref?: string,
+  budget_usd?: number,
 ): { run_id: string } {
   const name = path.basename(cwd) || cwd
   const project = upsertProject(db, { name, cwd })
-  const run = createRun(db, { project_id: project.id, title, external_ref })
+  const run = createRun(db, { project_id: project.id, title, external_ref, budget_usd })
   return { run_id: run.id }
 }
 

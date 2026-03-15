@@ -6,8 +6,9 @@ import { spawnWorker, writeWorkerMcpConfig, workerLogPath } from './spawner/inde
 import { spawnCursorWorker } from './spawner/cursor.js'
 import { openWorkerTerminal } from './spawner/terminal.js'
 import { removeWorktree } from './git/worktree.js'
-import { getTask, updateTask } from './server/state/tasks.js'
+import { getTask, updateTask, listTasks } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
+import { handleSpawnWorker } from './server/tools/orchestrator.js'
 import { checkStuckWorkers } from './spawner/stuck-watcher.js'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
@@ -53,8 +54,54 @@ function startSpawnerWatcher(
   stuckTimeoutMinutes: number = 30,
 ): void {
   const launched = new Set<string>()
+  const retried = new Set<string>()  // tracks "{taskId}-{retryAttempt}" to avoid double-spawning
 
   setInterval(() => {
+    // Auto-retry failed tasks that still have remaining retries
+    const failedTasks = listTasks(db, 'failed').filter(t => t.retry_count < t.max_retries)
+    for (const task of failedTasks) {
+      const retryAttempt = task.retry_count + 1
+      const retryKey = `${task.id}-${retryAttempt}`
+      if (retried.has(retryKey)) continue
+      retried.add(retryKey)
+
+      // Find cwd from the most recent agent for this task
+      const prevAgent = db.prepare(
+        "SELECT * FROM agents WHERE task_id = ? ORDER BY created_at DESC LIMIT 1"
+      ).get(task.id) as AgentRow | undefined
+
+      if (!prevAgent?.cwd) {
+        console.warn(`[spawner] Cannot retry task ${task.id}: no cwd found for previous agent`)
+        continue
+      }
+
+      // Get failure reason from the most recent log entry
+      const lastLog = db.prepare(
+        "SELECT message FROM logs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1"
+      ).get(task.id) as { message: string } | undefined
+      const failureReason = lastLog?.message ?? 'unknown reason'
+
+      const newAgentId = `w-${task.id}-retry${retryAttempt}`
+      console.log(`[spawner] Retrying task ${task.id} (attempt ${retryAttempt}/${task.max_retries}): ${failureReason}`)
+
+      // Increment retry count and reset to pending before re-spawning
+      updateTask(db, task.id, { retry_count: retryAttempt, status: 'pending' })
+
+      // Log the retry attempt
+      db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+        task.id, 'info', `Retry attempt ${retryAttempt}/${task.max_retries} (previous failure: ${failureReason})`
+      )
+
+      // Register new agent and transition task to in_progress
+      const result = handleSpawnWorker(db, task.id, newAgentId, { cwd: prevAgent.cwd })
+      if (!result.ok) {
+        console.error(`[spawner] Failed to register retry worker for task ${task.id}: ${result.error}`)
+        // Revert so we can retry again on the next tick
+        updateTask(db, task.id, { retry_count: task.retry_count, status: 'failed' })
+        retried.delete(retryKey)
+      }
+    }
+
     const agents = db.prepare(
       "SELECT * FROM agents WHERE status = 'spawning'"
     ).all() as AgentRow[]
@@ -78,6 +125,7 @@ function startSpawnerWatcher(
         taskId: task.id,
         taskTitle: task.title,
         taskDescription: task.description ?? undefined,
+        model: task.model,
         agentId: agent.id,
         worktreePath: agent.cwd,
         mcpConfigPath,

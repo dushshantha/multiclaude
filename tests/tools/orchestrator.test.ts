@@ -39,6 +39,21 @@ describe('orchestrator tools', () => {
     expect(viz).toContain('a → c')
   })
 
+  it('plan_dag stores model field on tasks (defaults to sonnet)', () => {
+    const epic = {
+      tasks: [
+        { id: 'a', title: 'Fast task', model: 'haiku', dependsOn: [] },
+        { id: 'b', title: 'Standard task', dependsOn: [] },
+        { id: 'c', title: 'Complex task', model: 'opus', dependsOn: [] },
+      ]
+    }
+    handlePlanDag(db, epic)
+    const tasks = db.prepare('SELECT id, model FROM tasks ORDER BY id').all() as { id: string; model: string }[]
+    expect(tasks.find(t => t.id === 'a')?.model).toBe('haiku')
+    expect(tasks.find(t => t.id === 'b')?.model).toBe('sonnet')
+    expect(tasks.find(t => t.id === 'c')?.model).toBe('opus')
+  })
+
   it('get_system_status returns tasks, agents, and readyTasks', () => {
     const status = handleGetSystemStatus(db)
     expect(status).toHaveProperty('tasks')
