@@ -3,6 +3,7 @@ import { render, Box, Text, useInput, useApp } from 'ink'
 import { exec } from 'child_process'
 import { listTasks } from '../server/state/tasks.js'
 import { listAgents } from '../server/state/agents.js'
+import { listRuns } from '../server/state/runs.js'
 import { workerLogPath } from '../spawner/index.js'
 import { calculateCost } from '../server/cost.js'
 import type { Task } from '../server/state/tasks.js'
@@ -89,6 +90,7 @@ interface DashboardProps {
 function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [latestLogs, setLatestLogs] = useState<Map<string, LatestLogRow>>(new Map())
+  const [runTickets, setRunTickets] = useState<Map<string, string>>(new Map())
   const { exit } = useApp()
 
   useEffect(() => {
@@ -96,6 +98,12 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
       setTasks(listTasks(db))
       const rows = db.prepare(LATEST_LOG_SQL).all() as LatestLogRow[]
       setLatestLogs(new Map(rows.map(r => [r.task_id, r])))
+      const runs = listRuns(db)
+      const tickets = new Map<string, string>()
+      for (const run of runs) {
+        if (run.external_ref) tickets.set(run.id, run.external_ref)
+      }
+      setRunTickets(tickets)
     }
     refresh()
     const interval = setInterval(refresh, refreshMs)
@@ -139,6 +147,7 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
           const log = latestLogs.get(t.id)
           const logMsg = log?.message?.replace(/\n/g, ' ').slice(0, 45)
           const stuck = isStuck(t, log)
+          const ticket = t.run_id ? runTickets.get(t.run_id) : undefined
 
           let timeStr = '--'
           if (t.status === 'in_progress' && t.started_at) {
@@ -148,12 +157,17 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
           }
 
           const tokenStr = t.total_tokens != null ? formatTokens(t.total_tokens) : '--'
+          // With ticket badge, title gets less space; without, full 27 chars
+          const titleWidth = ticket ? 18 : 26
+          const titleStr = t.title.slice(0, titleWidth).padEnd(titleWidth + 1)
 
           return (
             <Box key={t.id} flexDirection="column">
               <Box>
+                <Text color={color}>{icon} </Text>
+                {ticket && <Text dimColor>[{ticket}] </Text>}
                 <Text color={color}>
-                  {icon} {t.title.slice(0, 26).padEnd(27)}{' '}
+                  {titleStr}
                 </Text>
                 <Text color={color}>
                   {t.status.padEnd(12)}{' '}
