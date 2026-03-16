@@ -197,6 +197,31 @@
       return `${pathHtml}<div class="log-entries"><div class="empty">Loading logs…</div></div>`
     }
 
+    function taskRowCellsHtml(t) {
+      const hint = t.agent_id ? '<span class="expand-hint">▶ click to expand</span>' : ''
+      const durSecs = t.status === 'in_progress' ? elapsedSeconds(t.started_at) : t.duration_seconds
+      const durHtml = durSecs != null
+        ? `<span class="duration">${formatDuration(durSecs)}${t.status === 'in_progress' ? ' ▸' : ''}</span>`
+        : '-'
+      const tokHtml = t.total_tokens
+        ? `<span class="tokens">${formatTokens(t.total_tokens)}</span><div class="token-detail">${formatTokens(t.input_tokens)}↑ ${formatTokens(t.output_tokens)}↓</div>`
+        : '-'
+      const modelKey = (t.model || '').toLowerCase().includes('haiku') ? 'haiku' : (t.model || '').toLowerCase().includes('opus') ? 'opus' : 'sonnet'
+      const modelHtml = t.model ? `<span class="model-badge ${modelKey}">${escapeHtml(modelKey)}</span>` : '-'
+      const costHtml = t.cost_usd ? `<span class="cost-val">${formatCost(t.cost_usd)}</span>` : '-'
+      const retryHtml = t.retry_count > 0 ? `<span class="retry">⚠ ${t.retry_count}/${t.max_retries}</span>` : '-'
+      return [
+        `${escapeHtml(t.title)}${hint}`,
+        `<span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>`,
+        modelHtml,
+        escapeHtml(t.agent_id || '-'),
+        retryHtml,
+        durHtml,
+        tokHtml,
+        costHtml,
+      ]
+    }
+
     function render(data) {
       latestData = data
       const { tasks, agentLogPaths = {} } = data
@@ -211,63 +236,78 @@
       document.getElementById('total-cost').textContent = totalCost > 0 ? formatCost(totalCost) : '$0'
 
       const tbody = document.getElementById('tasks')
-      const rows = tasks.map(t => {
-        const isOpen = openPanels.has(t.id)
-        const hint = t.agent_id ? '<span class="expand-hint">▶ click to expand</span>' : ''
-        const durSecs = t.status === 'in_progress' ? elapsedSeconds(t.started_at) : t.duration_seconds
-        const durHtml = durSecs != null
-          ? `<span class="duration">${formatDuration(durSecs)}${t.status === 'in_progress' ? ' ▸' : ''}</span>`
-          : '-'
-        const tokHtml = t.total_tokens
-          ? `<span class="tokens">${formatTokens(t.total_tokens)}</span><div class="token-detail">${formatTokens(t.input_tokens)}↑ ${formatTokens(t.output_tokens)}↓</div>`
-          : '-'
-        const modelKey = (t.model || '').toLowerCase().includes('haiku') ? 'haiku' : (t.model || '').toLowerCase().includes('opus') ? 'opus' : 'sonnet'
-        const modelHtml = t.model ? `<span class="model-badge ${modelKey}">${escapeHtml(modelKey)}</span>` : '-'
-        const costHtml = t.cost_usd ? `<span class="cost-val">${formatCost(t.cost_usd)}</span>` : '-'
-        return `
-          <tr class="task-row" onclick="togglePanel('${escapeHtml(t.id)}')">
-            <td>${escapeHtml(t.title)}${hint}</td>
-            <td><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span></td>
-            <td>${modelHtml}</td>
-            <td>${escapeHtml(t.agent_id || '-')}</td>
-            <td>${t.retry_count > 0 ? `<span class="retry">⚠ ${t.retry_count}/${t.max_retries}</span>` : '-'}</td>
-            <td>${durHtml}</td>
-            <td>${tokHtml}</td>
-            <td>${costHtml}</td>
-          </tr>
-          <tr class="log-row" id="log-row-${escapeHtml(t.id)}">
-            <td colspan="7">
-              <div class="log-panel ${isOpen ? 'open' : ''}" id="log-panel-${escapeHtml(t.id)}">
-                ${isOpen ? buildLogPanelSkeleton(t.id, agentLogPaths) : ''}
-              </div>
-            </td>
-          </tr>
-        `
-      }).join('')
-      tbody.innerHTML = rows
+      const newTaskIdSet = new Set(tasks.map(t => t.id))
 
-      // Re-attach live streams for any open panels (DOM was rebuilt)
-      for (const taskId of openPanels) {
-        const stream = logStreams.get(taskId)
-        if (stream) {
-          // Close old stream — will restart via startLogStream
-          stream.close()
-          logStreams.delete(taskId)
+      // Remove rows for tasks that no longer exist
+      for (const row of Array.from(tbody.querySelectorAll('tr.task-row'))) {
+        const tid = row.dataset.taskId
+        if (!newTaskIdSet.has(tid)) {
+          document.getElementById(`log-row-${tid}`)?.remove()
+          row.remove()
+          stopLogStream(tid)
+          openPanels.delete(tid)
         }
-        startLogStream(taskId)
+      }
+
+      // Update existing rows in-place or insert new ones (preserves log panel DOM)
+      let prevLogRow = null
+      for (const t of tasks) {
+        const cells = taskRowCellsHtml(t)
+        const existingRow = document.getElementById(`task-row-${t.id}`)
+        if (existingRow) {
+          // Update only the cells that may have changed
+          for (let i = 0; i < cells.length; i++) {
+            if (existingRow.cells[i] && existingRow.cells[i].innerHTML !== cells[i]) {
+              existingRow.cells[i].innerHTML = cells[i]
+            }
+          }
+          prevLogRow = document.getElementById(`log-row-${t.id}`)
+        } else {
+          // New task — insert row pair
+          const isOpen = openPanels.has(t.id)
+          const taskRowHtml = `<tr class="task-row" id="task-row-${escapeHtml(t.id)}" data-task-id="${escapeHtml(t.id)}" onclick="togglePanel('${escapeHtml(t.id)}')">
+            <td>${cells[0]}</td><td>${cells[1]}</td><td>${cells[2]}</td>
+            <td>${cells[3]}</td><td>${cells[4]}</td><td>${cells[5]}</td>
+            <td>${cells[6]}</td><td>${cells[7]}</td>
+          </tr>`
+          const logRowHtml = `<tr class="log-row" id="log-row-${escapeHtml(t.id)}">
+            <td colspan="7"><div class="log-panel ${isOpen ? 'open' : ''}" id="log-panel-${escapeHtml(t.id)}">
+              ${isOpen ? buildLogPanelSkeleton(t.id, agentLogPaths) : ''}
+            </div></td>
+          </tr>`
+          const temp = document.createElement('tbody')
+          temp.innerHTML = taskRowHtml + logRowHtml
+          const [newTaskRow, newLogRow] = Array.from(temp.children)
+          if (prevLogRow) {
+            prevLogRow.after(newTaskRow, newLogRow)
+          } else {
+            tbody.prepend(newLogRow)
+            tbody.prepend(newTaskRow)
+          }
+          prevLogRow = newLogRow
+          if (isOpen) startLogStream(t.id)
+        }
       }
     }
 
     function togglePanel(taskId) {
       // Don't toggle if the user is selecting text
       if (window.getSelection && window.getSelection().toString()) return
+      const panel = document.getElementById(`log-panel-${taskId}`)
+      if (!panel) return
       if (openPanels.has(taskId)) {
         openPanels.delete(taskId)
         stopLogStream(taskId)
+        panel.classList.remove('open')
       } else {
         openPanels.add(taskId)
+        panel.classList.add('open')
+        // Populate skeleton if empty, then start stream
+        if (!panel.querySelector('.log-entries')) {
+          panel.innerHTML = buildLogPanelSkeleton(taskId, latestData?.agentLogPaths ?? {})
+        }
+        startLogStream(taskId)
       }
-      if (latestData) render(latestData)
     }
 
     const es = new EventSource('/api/events')

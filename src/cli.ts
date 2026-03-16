@@ -75,9 +75,10 @@ function startSpawnerWatcher(
         continue
       }
 
-      // Get failure reason from the most recent log entry
+      // Get failure reason from the most recent error/warn log entry (skip info-level
+      // "Retry attempt" messages so the reason doesn't nest recursively on each retry)
       const lastLog = db.prepare(
-        "SELECT message FROM logs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1"
+        "SELECT message FROM logs WHERE task_id = ? AND level IN ('error', 'warn') ORDER BY created_at DESC LIMIT 1"
       ).get(task.id) as { message: string } | undefined
       const failureReason = lastLog?.message ?? 'unknown reason'
 
