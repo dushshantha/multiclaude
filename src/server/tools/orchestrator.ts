@@ -1,4 +1,5 @@
 import path from 'path'
+import { simpleGit } from 'simple-git'
 import type Database from 'better-sqlite3'
 import { createTask, listTasks, getTask, updateTask } from '../state/tasks.js'
 import { addEdge, getReadyTasks, getBlockers } from '../state/dag.js'
@@ -198,7 +199,16 @@ export async function handleSpawnWorker(
   if (opts.cwd) {
     upsertProject(db, { name: path.basename(opts.cwd), cwd: opts.cwd })
     try {
-      const info = await createWorktree(opts.cwd, taskId)
+      let baseBranch: string | undefined
+      if (task?.run_id) {
+        const runBranch = `mc/run-${task.run_id}`
+        const git = simpleGit(opts.cwd)
+        const branches = await git.branchLocal()
+        if (branches.all.includes(runBranch)) {
+          baseBranch = runBranch
+        }
+      }
+      const info = await createWorktree(opts.cwd, taskId, undefined, baseBranch)
       updateTask(db, taskId, { worktree_path: info.path, branch: info.branch, repo_path: opts.cwd })
       agentCwd = info.path
     } catch (err: unknown) {
