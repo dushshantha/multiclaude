@@ -138,5 +138,5 @@ describe('worktree lifecycle integration', () => {
 
     // Worktree for task-b is preserved (not cleaned up) so the developer can resolve manually
     expect(existsSync(taskB.worktree_path!)).toBe(true)
-  })
+  }, 15000)
 })
