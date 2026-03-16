@@ -39,11 +39,15 @@ export function branchNameFromTitle(title: string): string {
   return `${prefix}/${slug}`
 }
 
-export async function createWorktree(repoPath: string, taskId: string, taskTitle?: string): Promise<WorktreeInfo> {
+export async function createWorktree(repoPath: string, taskId: string, taskTitle?: string, baseBranch?: string): Promise<WorktreeInfo> {
   const branch = taskTitle ? branchNameFromTitle(taskTitle) : `mc/${taskId}`
   const worktreePath = mkdtempSync(join(tmpdir(), `mc-${taskId}-`))
   const git = simpleGit(repoPath)
-  await git.raw(['worktree', 'add', '-b', branch, worktreePath])
+  if (baseBranch) {
+    await git.raw(['worktree', 'add', '-b', branch, worktreePath, baseBranch])
+  } else {
+    await git.raw(['worktree', 'add', '-b', branch, worktreePath])
+  }
   return { path: worktreePath, branch, taskId }
 }
 
