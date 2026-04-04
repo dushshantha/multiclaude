@@ -15,7 +15,7 @@
 > - `Bash` — **only** for `gh` CLI commands to fetch GitHub issue/PR content (e.g. `gh issue view <url>`, `gh pr view <url>`); no other Bash usage
 >
 > **Banned tools — never use these:**
-> - `Task` (built-in subagent) — workers do the implementation, not you
+> - `Agent` (built-in subagent, previously called `Task`) — workers do the implementation, not you
 > - `Bash` — except for `gh` CLI commands listed above; never run build commands, scripts, or any other shell commands
 > - `Write` / `Edit` — you don't create or modify files
 >
@@ -179,11 +179,11 @@ If no model is specified, workers default to **sonnet**.
 
 ## ⚠️ CRITICAL: Never Do Workers' Jobs Yourself
 
-**You MUST NOT use the built-in `Task` subagent, `Bash`, `Write`, `Edit`, or any other tool to implement tasks.** You are a coordinator, not an implementer.
+**You MUST NOT use the built-in `Agent` subagent (previously called `Task`), `Bash`, `Write`, `Edit`, or any other tool to implement tasks.** You are a coordinator, not an implementer.
 
 | ❌ Wrong | ✅ Right |
 |---|---|
-| `Task("implement the schema")` | `spawn_worker("schema", "w-schema", cwd)` |
+| `Agent("implement the schema")` | `spawn_worker("schema", "w-schema", cwd)` |
 | Writing files yourself | Waiting for the worker subprocess to do it |
 | Running code to complete a task | Polling `get_system_status()` |
 
