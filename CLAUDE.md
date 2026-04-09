@@ -1,3 +1,106 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```bash
+# Development (run directly with tsx, no build step needed)
+npx tsx src/cli.ts start
+npx tsx src/cli.ts start --no-tui --no-web
+
+# Tests
+npm test                    # run all tests once
+npm run test:watch          # watch mode
+
+# Build (compiles to dist/, also copies src/web/public)
+npm run build
+
+# Install as global CLI
+npm link
+```
+
+To run a single test file: `npx vitest run tests/dag.test.ts`
+
+## Architecture
+
+MultiClaude is a multi-agent orchestration layer on top of Claude Code. A single **orchestrator** Claude Code instance talks to a coordination server via MCP; the server spawns **worker** Claude Code subprocesses that each implement one task in isolation.
+
+### Component map
+
+```
+src/cli.ts               Entry point. Handles `start` and `init` subcommands.
+                         Starts coord server, web server, TUI, and the spawner watcher loop.
+
+src/server/index.ts      Express HTTP server on port 7432 (default).
+                         Two MCP endpoints: /orchestrator (OAuth-gated) and /worker (no auth).
+                         Each endpoint creates a fresh McpServer per session using
+                         StreamableHTTP transport from @modelcontextprotocol/sdk.
+
+src/server/tools/        MCP tool handlers (pure functions over the SQLite db).
+  orchestrator.ts        plan_dag, spawn_worker, get_system_status, wait_for_event,
+                         create_run, list_projects, list_runs, cancel_task, complete_task
+  worker.ts              get_my_task, report_progress, report_done, report_blocked
+
+src/server/state/        SQLite state via better-sqlite3 (WAL mode).
+  db.ts                  Schema + migrations (ALTER TABLE ... try/catch pattern).
+  tasks.ts               Task CRUD and status transitions.
+  dag.ts                 DAG engine: addEdge, getReadyTasks (tasks whose blockers are all done).
+  agents.ts              Agent registry.
+
+src/spawner/index.ts     spawnWorker(): launches `claude` subprocess with --mcp-config,
+                         --dangerously-skip-permissions, and a prompt injected via CLI arg.
+                         Writes .claude/settings.local.json into the worktree before spawning.
+src/spawner/cursor.ts    Cursor worker variant — uses node-pty for PTY requirement.
+src/spawner/stuck-watcher.ts  Detects agents that haven't progressed past thresholds.
+
+src/git/worktree.ts      createWorktree / removeWorktree using git worktree add.
+                         branchNameFromTitle() derives branch names from task titles.
+src/git/merge.ts         ensureIntegrationBranch / mergeWorktreeBranch.
+                         Auto-resolves package-lock.json add/add conflicts (takes theirs).
+
+src/init.ts              `multiclaude init`: writes CLAUDE.md (or .cursor/rules/*.mdc),
+                         .multiclaude.json, and .claude/settings.local.json in target project.
+src/config.ts            Reads/writes .multiclaude.json (workerRuntime, stuck thresholds).
+
+src/tui/index.tsx        Ink (React) terminal dashboard.
+src/web/server.ts        Express web dashboard with SSE live updates on port 7433 (default).
+
+prompts/orchestrator.md  System prompt injected into CLAUDE.md of target projects.
+prompts/worker.md        System prompt passed as CLI arg to each worker subprocess.
+tests/                   Vitest test suite (31 tests).
+```
+
+### Git isolation model
+
+Each task gets its own git worktree in a temp directory (`/tmp/mc-<taskId>-XXXX/`) on a branch like `feature/task-slug` or `fix/task-slug`. When a worker calls `report_done`, the server merges the task branch into a per-run integration branch (`mc/run-<runId>`). The orchestrator creates a PR from that integration branch to `main` after all tasks complete.
+
+### Key data flows
+
+**Spawning a worker:**
+`orchestrator calls spawn_worker` → agent row inserted with status `spawning` → spawner watcher (1s poll) sees it → creates git worktree → writes worker MCP config + settings.local.json → launches `claude` subprocess → agent status set to `running`
+
+**Task completion:**
+worker calls `report_done` → `handleReportDone` in [worker.ts](src/server/tools/worker.ts) marks task done and triggers `mergeWorktreeBranch` → `wait_for_event` unblocks in orchestrator → orchestrator spawns next wave of workers
+
+**Retry flow:**
+subprocess exits without calling `report_done` → spawner watcher marks agent `failed` → spawner watcher auto-retries up to `max_retries` (default 3) times → on final failure, orchestrator escalates to user
+
+### MCP transport
+
+Uses `StreamableHTTPServerTransport` (Streamable HTTP, not SSE). Each request to `/orchestrator` or `/worker` either creates a new session (no `mcp-session-id` header) or routes to an existing one. OAuth is implemented in-memory with auto-approve — suitable for localhost only.
+
+### ESM
+
+`"type": "module"` in package.json. Use `.js` extensions in all import paths even for `.ts` sources. Use `fileURLToPath(new URL('.', import.meta.url))` instead of `__dirname`.
+
+### Reserved ports
+
+- **7432** — coordination server (MCP)
+- **7433** — web dashboard
+
+Never kill these during development or agent tasks.
+
 <!-- multiclaude:start -->
 # MultiClaude Orchestrator
 
@@ -16,7 +119,7 @@
 > - `Bash` — **only** for `gh` CLI commands to fetch GitHub issue/PR content (e.g. `gh issue view <url>`, `gh pr view <url>`); no other Bash usage
 >
 > **Banned tools — never use these:**
-> - `Task` (built-in subagent) — workers do the implementation, not you
+> - `Agent` (built-in subagent, previously called `Task`) — workers do the implementation, not you
 > - `Bash` — except for `gh` CLI commands listed above; never run build commands, scripts, or any other shell commands
 > - `Write` / `Edit` — you don't create or modify files
 >
@@ -180,11 +283,11 @@ If no model is specified, workers default to **sonnet**.
 
 ## ⚠️ CRITICAL: Never Do Workers' Jobs Yourself
 
-**You MUST NOT use the built-in `Task` subagent, `Bash`, `Write`, `Edit`, or any other tool to implement tasks.** You are a coordinator, not an implementer.
+**You MUST NOT use the built-in `Agent` subagent (previously called `Task`), `Bash`, `Write`, `Edit`, or any other tool to implement tasks.** You are a coordinator, not an implementer.
 
 | ❌ Wrong | ✅ Right |
 |---|---|
-| `Task("implement the schema")` | `spawn_worker("schema", "w-schema", cwd)` |
+| `Agent("implement the schema")` | `spawn_worker("schema", "w-schema", cwd)` |
 | Writing files yourself | Waiting for the worker subprocess to do it |
 | Running code to complete a task | Polling `get_system_status()` |
 

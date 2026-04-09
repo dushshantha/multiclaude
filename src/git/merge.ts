@@ -69,11 +69,11 @@ export async function mergeWorktreeBranch(repoPath: string, branch: string, runI
 
     // Push integration branch to origin so the orchestrator can create a PR
     try {
-      await tmpGit.push('origin', integBranch)
+      await git.push('origin', integBranch)
     } catch {
       // Remote branch may not exist yet — retry with --set-upstream
       try {
-        await tmpGit.raw(['push', '--set-upstream', 'origin', integBranch])
+        await git.raw(['push', '--set-upstream', 'origin', integBranch])
       } catch {
         // No remote configured or push not possible — skip silently
       }
