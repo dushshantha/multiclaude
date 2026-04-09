@@ -66,6 +66,32 @@ describe('merge', () => {
     await removeWorktree(repoPath, info)
   })
 
+  it('ensureIntegrationBranch works with uncommitted changes in main repo', async () => {
+    // Write an uncommitted file — the old implementation would have failed here
+    writeFileSync(join(repoPath, 'dirty.txt'), 'uncommitted change')
+    await ensureIntegrationBranch(repoPath)
+    const branches = execSync('git branch', { cwd: repoPath }).toString()
+    expect(branches).toContain('mc/integration')
+  })
+
+  it('mergeWorktreeBranch works with uncommitted changes in main repo', async () => {
+    await ensureIntegrationBranch(repoPath)
+    const info = await createWorktree(repoPath, 'task-dirty')
+    writeFileSync(join(info.path, 'feature-dirty.ts'), 'export const z = 3')
+    execSync('git add . && git commit -m "add feature-dirty"', { cwd: info.path })
+
+    // Dirty the main repo working tree
+    writeFileSync(join(repoPath, 'dirty.txt'), 'uncommitted change')
+
+    // Should NOT throw — main repo working tree is never checked out
+    await expect(mergeWorktreeBranch(repoPath, info.branch)).resolves.not.toThrow()
+
+    const files = execSync('git show mc/integration:feature-dirty.ts', { cwd: repoPath }).toString()
+    expect(files).toContain('export const z = 3')
+
+    await removeWorktree(repoPath, info)
+  })
+
   it('auto-resolves add/add conflict on package-lock.json', async () => {
     const runId = 'conflict-run'
     await ensureIntegrationBranch(repoPath, runId)
