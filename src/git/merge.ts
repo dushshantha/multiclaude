@@ -50,7 +50,7 @@ export async function mergeWorktreeBranch(repoPath: string, branch: string, runI
         await tmpGit.raw(['checkout', '--theirs', ...filesToResolve])
         await tmpGit.raw(['add', ...filesToResolve])
       }
-      await tmpGit.raw(['commit', '--no-edit'])
+      await tmpGit.raw(['commit', '-m', `merge: ${branch} into ${integBranch}`])
     }
   } finally {
     await git.raw(['worktree', 'remove', '--force', tmpDir])
