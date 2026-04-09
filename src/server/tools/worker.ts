@@ -57,7 +57,7 @@ export async function handleReportDone(
         await mergeWorktreeBranch(projectCwd, task.branch, runId)
         const integBranch = runId ? `mc/run-${runId}` : 'mc/integration'
         db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
-          taskId, 'info', `Merged ${task.branch} into ${integBranch}`
+          taskId, 'info', `Merged and pushed ${task.branch} to origin/${integBranch}`
         )
         await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch, taskId })
       } catch (err: unknown) {
