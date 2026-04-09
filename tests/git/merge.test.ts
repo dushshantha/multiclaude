@@ -114,4 +114,33 @@ describe('merge', () => {
 
     await removeWorktree(repoPath, info)
   })
+
+  it('serializes concurrent merges into the same integration branch', async () => {
+    const runId = 'concurrent-run'
+    await ensureIntegrationBranch(repoPath, runId)
+
+    // Create two worktrees with non-conflicting changes
+    const info1 = await createWorktree(repoPath, 'task-concurrent-1')
+    writeFileSync(join(info1.path, 'feature-a.ts'), 'export const a = 1')
+    execSync('git add . && git commit -m "add feature-a"', { cwd: info1.path })
+
+    const info2 = await createWorktree(repoPath, 'task-concurrent-2')
+    writeFileSync(join(info2.path, 'feature-b.ts'), 'export const b = 2')
+    execSync('git add . && git commit -m "add feature-b"', { cwd: info2.path })
+
+    // Fire both merges concurrently — the mutex should serialize them without error
+    await Promise.all([
+      mergeWorktreeBranch(repoPath, info1.branch, runId),
+      mergeWorktreeBranch(repoPath, info2.branch, runId),
+    ])
+
+    // Both files should be present on the integration branch
+    const filesA = execSync(`git show mc/run-${runId}:feature-a.ts`, { cwd: repoPath }).toString()
+    const filesB = execSync(`git show mc/run-${runId}:feature-b.ts`, { cwd: repoPath }).toString()
+    expect(filesA).toContain('export const a = 1')
+    expect(filesB).toContain('export const b = 2')
+
+    await removeWorktree(repoPath, info1)
+    await removeWorktree(repoPath, info2)
+  })
 })

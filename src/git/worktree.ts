@@ -16,8 +16,9 @@ const STOP_WORDS = new Set(['a', 'an', 'the', 'and', 'or', 'in', 'on', 'at', 'to
  * Derive a git branch name from a task title.
  * Prefix is 'fix/' when the title indicates a fix/bug/patch, otherwise 'feature/'.
  * The slug is 2-3 meaningful lowercase words derived from the title.
+ * If taskId is provided, appends a short identifier to ensure uniqueness.
  */
-export function branchNameFromTitle(title: string): string {
+export function branchNameFromTitle(title: string, taskId?: string): string {
   const lower = title.toLowerCase()
 
   // Detect fix prefix before stripping conventional commit prefix
@@ -36,11 +37,20 @@ export function branchNameFromTitle(title: string): string {
     .slice(0, 3)
 
   const slug = words.length > 0 ? words.join('-') : 'task'
+
+  // Append taskId suffix for uniqueness if provided
+  if (taskId) {
+    // Use the last part after dash (usually a number) for uniqueness, or first 4 chars
+    const parts = taskId.split(/[-_]/)
+    const taskIdPart = parts.length > 1 ? parts[parts.length - 1] : taskId.substring(0, 4)
+    return `${prefix}/${slug}-${taskIdPart}`
+  }
+
   return `${prefix}/${slug}`
 }
 
 export async function createWorktree(repoPath: string, taskId: string, taskTitle?: string, baseBranch?: string): Promise<WorktreeInfo> {
-  const branch = taskTitle ? branchNameFromTitle(taskTitle) : `mc/${taskId}`
+  const branch = taskTitle ? branchNameFromTitle(taskTitle, taskId) : `mc/${taskId}`
   const worktreePath = mkdtempSync(join(tmpdir(), `mc-${taskId}-`))
   const git = simpleGit(repoPath)
   if (baseBranch) {
@@ -53,7 +63,8 @@ export async function createWorktree(repoPath: string, taskId: string, taskTitle
 
 export async function removeWorktree(repoPath: string, info: WorktreeInfo): Promise<void> {
   const git = simpleGit(repoPath)
-  await git.raw(['worktree', 'remove', '--force', info.path])
+  // Silently ignore errors when the worktree is already gone (idempotent)
+  await git.raw(['worktree', 'remove', '--force', info.path]).catch(() => {})
   await git.raw(['branch', '-D', info.branch]).catch(() => {})
   await rm(info.path, { recursive: true, force: true }).catch(() => {})
 }
