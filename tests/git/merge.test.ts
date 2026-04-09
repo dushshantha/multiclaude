@@ -92,6 +92,31 @@ describe('merge', () => {
     await removeWorktree(repoPath, info)
   })
 
+  it('pushes integration branch to origin after merge', async () => {
+    // Set up a bare repo as the remote origin
+    const originPath = mkdtempSync(join(tmpdir(), 'mc-merge-origin-'))
+    execSync('git init --bare', { cwd: originPath })
+    execSync(`git remote add origin ${originPath}`, { cwd: repoPath })
+    // Push main branch so origin has a base
+    execSync('git push -u origin HEAD:main', { cwd: repoPath })
+
+    const runId = 'push-test-run'
+    await ensureIntegrationBranch(repoPath, runId)
+    const integBranch = `mc/run-${runId}`
+    const info = await createWorktree(repoPath, 'task-push')
+    writeFileSync(join(info.path, 'pushed.ts'), 'export const pushed = true')
+    execSync('git add . && git commit -m "add pushed file"', { cwd: info.path })
+
+    await mergeWorktreeBranch(repoPath, info.branch, runId)
+
+    // Verify the integration branch was pushed to origin
+    const remoteBranches = execSync('git ls-remote --heads origin', { cwd: repoPath }).toString()
+    expect(remoteBranches).toContain(integBranch)
+
+    await removeWorktree(repoPath, info)
+    rmSync(originPath, { recursive: true, force: true })
+  })
+
   it('auto-resolves add/add conflict on package-lock.json', async () => {
     const runId = 'conflict-run'
     await ensureIntegrationBranch(repoPath, runId)
