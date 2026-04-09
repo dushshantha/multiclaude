@@ -85,7 +85,7 @@ describe('worktree lifecycle integration', () => {
     expect(mergeLog?.message).toContain('mc/integration')
   })
 
-  it('merge conflict: second task fails, conflict message logged, worktree preserved', async () => {
+  it('merge conflict: second task fails, conflict message logged, worktree cleaned up for retry', async () => {
     // Add a shared file so both branches can conflict on it
     execSync(
       'printf "shared content\\n" > shared.txt && git add . && git commit -m "add shared"',
@@ -106,7 +106,7 @@ describe('worktree lifecycle integration', () => {
     expect(taskA.worktree_path).toBeTruthy()
     expect(taskB.worktree_path).toBeTruthy()
 
-    // Track both for cleanup (A's worktree is removed on success, B's is preserved on conflict)
+    // Track both for cleanup safety (both should be removed by handleReportDone, but guard just in case)
     worktreesToClean.push(taskA.worktree_path!, taskB.worktree_path!)
 
     // Both workers edit the same lines of shared.txt differently
@@ -136,7 +136,7 @@ describe('worktree lifecycle integration', () => {
     expect(conflictLog?.message).toContain('Merge conflict')
     expect(conflictLog?.message).toContain('mc/task-b')
 
-    // Worktree for task-b is preserved (not cleaned up) so the developer can resolve manually
-    expect(existsSync(taskB.worktree_path!)).toBe(true)
+    // Worktree for task-b is removed on failure so retries can recreate it with the same branch name
+    expect(existsSync(taskB.worktree_path!)).toBe(false)
   }, 15000)
 })

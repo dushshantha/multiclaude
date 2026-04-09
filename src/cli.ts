@@ -5,7 +5,6 @@ import { startTui } from './tui/index.js'
 import { spawnWorker, writeWorkerMcpConfig, workerLogPath } from './spawner/index.js'
 import { spawnCursorWorker } from './spawner/cursor.js'
 import { openWorkerTerminal } from './spawner/terminal.js'
-import { removeWorktree } from './git/worktree.js'
 import { getTask, updateTask, listTasks } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
 import { handleSpawnWorker } from './server/tools/orchestrator.js'
@@ -165,18 +164,6 @@ function startSpawnerWatcher(
             if (tokens.total_tokens !== undefined) {
               updateTask(db, agent.task_id, tokens)
             }
-            // Cleanup worktree if task completed successfully
-            const task = getTask(db, agent.task_id)
-            if (task?.status === 'done' && task.worktree_path && task.branch) {
-              const projectRow = task.run_id
-                ? (db.prepare('SELECT p.cwd FROM projects p JOIN runs r ON r.project_id = p.id WHERE r.id = ?').get(task.run_id) as { cwd: string } | undefined)
-                : undefined
-              if (projectRow?.cwd) {
-                removeWorktree(projectRow.cwd, { path: task.worktree_path, branch: task.branch, taskId: task.id }).catch(err => {
-                  console.error(`[spawner] Failed to remove worktree for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`)
-                })
-              }
-            }
           }
         })
       } else {
@@ -211,18 +198,6 @@ function startSpawnerWatcher(
             const tokens = parseTokensFromLog(workerLogPath(agent.id))
             if (tokens.total_tokens !== undefined) {
               updateTask(db, agent.task_id, tokens)
-            }
-            // Cleanup worktree if task completed successfully
-            const task = getTask(db, agent.task_id)
-            if (task?.status === 'done' && task.worktree_path && task.branch) {
-              const projectRow = task.run_id
-                ? (db.prepare('SELECT p.cwd FROM projects p JOIN runs r ON r.project_id = p.id WHERE r.id = ?').get(task.run_id) as { cwd: string } | undefined)
-                : undefined
-              if (projectRow?.cwd) {
-                removeWorktree(projectRow.cwd, { path: task.worktree_path, branch: task.branch, taskId: task.id }).catch(err => {
-                  console.error(`[spawner] Failed to remove worktree for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`)
-                })
-              }
             }
           }
         })

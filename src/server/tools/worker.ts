@@ -65,6 +65,9 @@ export async function handleReportDone(
         db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
           taskId, 'error', `Merge conflict: ${task.branch} could not be merged into mc/integration — ${msg}`
         )
+        // Clean up the worktree so retries can recreate it with the same branch name
+        await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch, taskId })
+          .catch(() => {}) // best-effort; don't mask the original merge error
         updateTask(db, taskId, { status: 'failed' })
         if (task.agent_id) updateAgent(db, task.agent_id, { status: 'done' })
         return

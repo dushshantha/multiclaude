@@ -53,7 +53,8 @@ export async function createWorktree(repoPath: string, taskId: string, taskTitle
 
 export async function removeWorktree(repoPath: string, info: WorktreeInfo): Promise<void> {
   const git = simpleGit(repoPath)
-  await git.raw(['worktree', 'remove', '--force', info.path])
+  // Silently ignore errors when the worktree is already gone (idempotent)
+  await git.raw(['worktree', 'remove', '--force', info.path]).catch(() => {})
   await git.raw(['branch', '-D', info.branch]).catch(() => {})
   await rm(info.path, { recursive: true, force: true }).catch(() => {})
 }
