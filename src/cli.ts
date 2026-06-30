@@ -46,7 +46,7 @@ function parseTokensFromLog(logPath: string): { input_tokens?: number; output_to
 function startSpawnerWatcher(
   db: Database.Database,
   mcpConfigPath: string,
-  workerRuntime: WorkerRuntime = 'claude',
+  workerRuntime: WorkerRuntime = 'subprocess',
   serverPort: number = 7432,
   openTerminals: boolean = false,
   stuckWarningMinutes: number = 10,
@@ -133,14 +133,14 @@ function startSpawnerWatcher(
         openTerminals,
       }
 
-      if (workerRuntime === 'cursor') {
-        // Cursor worker: uses node-pty, writes its own .cursor/mcp.json
+      if (workerRuntime === 'tmux') {
+        // Tmux worker: uses node-pty, writes its own .cursor/mcp.json
         let ptyProcess
         try {
           ptyProcess = spawnCursorWorker({ ...spawnCfg, serverPort })
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err)
-          console.error(`[spawner] Failed to launch Cursor worker ${agent.id}: ${msg}`)
+          console.error(`[spawner] Failed to launch tmux worker ${agent.id}: ${msg}`)
           updateAgent(db, agent.id, { status: 'failed' })
           continue
         }
@@ -167,7 +167,7 @@ function startSpawnerWatcher(
           }
         })
       } else {
-        // Claude worker: uses ChildProcess with --mcp-config
+        // Subprocess worker: uses ChildProcess with --mcp-config
         const child = spawnWorker(spawnCfg)
 
         if (child.pid !== undefined) {
@@ -218,13 +218,13 @@ async function main() {
   const subcommand = args[0] && !args[0].startsWith('--') ? args[0] : 'start'
 
   if (subcommand === 'init') {
-    const useCursor = args.includes('--cursor')
-    const useClaude = args.includes('--claude')
-    if (useCursor && useClaude) {
-      console.error('Error: --cursor and --claude are mutually exclusive.')
+    const useTmux = args.includes('--tmux')
+    const useSubprocess = args.includes('--subprocess')
+    if (useTmux && useSubprocess) {
+      console.error('Error: --tmux and --subprocess are mutually exclusive.')
       process.exit(1)
     }
-    const runtime = useCursor ? 'cursor' : 'claude'
+    const runtime = useTmux ? 'tmux' : 'subprocess'
     runInit({ projectDir: process.cwd(), runtime })
     return
   }
@@ -242,8 +242,8 @@ async function main() {
   const workerRuntimeFlag = workerRuntimeArg
     ? (workerRuntimeArg.split('=')[1] as WorkerRuntime)
     : null
-  if (workerRuntimeFlag && workerRuntimeFlag !== 'claude' && workerRuntimeFlag !== 'cursor') {
-    console.error(`Error: --worker-runtime must be "claude" or "cursor", got "${workerRuntimeFlag}"`)
+  if (workerRuntimeFlag && workerRuntimeFlag !== 'subprocess' && workerRuntimeFlag !== 'tmux') {
+    console.error(`Error: --worker-runtime must be "subprocess" or "tmux", got "${workerRuntimeFlag}"`)
     process.exit(1)
   }
 
@@ -259,7 +259,7 @@ async function main() {
   // Read .multiclaude.json config early so we can route workers correctly.
   // --worker-runtime flag takes precedence over config file.
   const multiclaudeConfig = readConfig(process.cwd())
-  const effectiveRuntime: WorkerRuntime = workerRuntimeFlag ?? multiclaudeConfig?.workerRuntime ?? 'claude'
+  const effectiveRuntime: WorkerRuntime = workerRuntimeFlag ?? multiclaudeConfig?.workerRuntime ?? 'subprocess'
 
   console.log('Starting MultiClaude...')
 
@@ -362,14 +362,14 @@ async function main() {
     try { cursorSettings = JSON.parse(readFileSync(cursorSettingsPath, 'utf8')) } catch { /* missing or invalid */ }
     cursorSettings.permissions ??= {}
     cursorSettings.permissions.allow ??= []
-    const toolsToAdd = effectiveRuntime === 'cursor'
+    const toolsToAdd = effectiveRuntime === 'tmux'
       ? [...cursorCoordTools, ...cursorWorkerTools]
       : cursorCoordTools
     const added = toolsToAdd.filter(t => !cursorSettings.permissions!.allow!.includes(t))
     if (added.length > 0) {
       cursorSettings.permissions.allow.push(...added)
       writeFileSync(cursorSettingsPath, JSON.stringify(cursorSettings, null, 2) + '\n')
-      const label = effectiveRuntime === 'cursor' ? 'multiclaude-coord + multiclaude-worker' : 'multiclaude-coord'
+      const label = effectiveRuntime === 'tmux' ? 'multiclaude-coord + multiclaude-worker' : 'multiclaude-coord'
       console.log(`Allowed ${label} tools in ${cursorSettingsPath}`)
     }
   } catch (e) {
@@ -385,7 +385,7 @@ async function main() {
   console.log(`  Worker runtime:     ${effectiveRuntime}`)
   console.log(`  Terminal windows:   ${openTerminals ? 'enabled (--open-terminals)' : 'disabled (pass --open-terminals to enable)'}`)
   console.log(`  Connect a project:  multiclaude init   (run from your project directory)`)
-  console.log(`  Then just run:      ${effectiveRuntime === 'cursor' ? 'cursor' : 'claude'}`)
+  console.log(`  Then just run:      claude`)
   console.log(`\nNote: ports ${coordPort} (coord) and ${webPort} (web) are reserved — avoid killing them in agent tasks.\n`)
 
   if (!noTui) {

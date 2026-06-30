@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 
-export type WorkerRuntime = 'claude' | 'cursor'
+export type WorkerRuntime = 'subprocess' | 'tmux'
 
 export interface MultiClaudeConfig {
   workerRuntime: WorkerRuntime
@@ -10,6 +10,11 @@ export interface MultiClaudeConfig {
 }
 
 const CONFIG_FILENAME = '.multiclaude.json'
+const VALID_WORKER_RUNTIMES: readonly WorkerRuntime[] = ['subprocess', 'tmux']
+
+export function isValidWorkerRuntime(value: unknown): value is WorkerRuntime {
+  return typeof value === 'string' && VALID_WORKER_RUNTIMES.includes(value as WorkerRuntime)
+}
 
 export function readConfig(projectDir: string): MultiClaudeConfig | null {
   const configPath = join(projectDir, CONFIG_FILENAME)
