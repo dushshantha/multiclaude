@@ -3,7 +3,6 @@ import { startCoordServer } from './server/index.js'
 import { startWebServer } from './web/server.js'
 import { startTui } from './tui/index.js'
 import { spawnWorker, writeWorkerMcpConfig, workerLogPath } from './spawner/index.js'
-import { spawnCursorWorker } from './spawner/cursor.js'
 import { openWorkerTerminal } from './spawner/terminal.js'
 import { getTask, updateTask, listTasks } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
@@ -46,7 +45,7 @@ function parseTokensFromLog(logPath: string): { input_tokens?: number; output_to
 function startSpawnerWatcher(
   db: Database.Database,
   mcpConfigPath: string,
-  workerRuntime: WorkerRuntime = 'claude',
+  workerRuntime: WorkerRuntime = 'subprocess',
   serverPort: number = 7432,
   openTerminals: boolean = false,
   stuckWarningMinutes: number = 10,
@@ -133,75 +132,40 @@ function startSpawnerWatcher(
         openTerminals,
       }
 
-      if (workerRuntime === 'cursor') {
-        // Cursor worker: uses node-pty, writes its own .cursor/mcp.json
-        let ptyProcess
-        try {
-          ptyProcess = spawnCursorWorker({ ...spawnCfg, serverPort })
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err)
-          console.error(`[spawner] Failed to launch Cursor worker ${agent.id}: ${msg}`)
-          updateAgent(db, agent.id, { status: 'failed' })
-          continue
-        }
+      // Spawn worker as subprocess (tmux spawning not yet implemented)
+      const child = spawnWorker(spawnCfg)
 
-        updateAgent(db, agent.id, { pid: ptyProcess.pid })
-
-        if (openTerminals) {
-          openWorkerTerminal(agent.id, workerLogPath(agent.id))
-        }
-
-        ptyProcess.onExit(() => {
-          // If worker exited without calling report_done, mark agent as failed
-          const current = db.prepare(
-            "SELECT status FROM agents WHERE id = ?"
-          ).get(agent.id) as { status: string } | undefined
-          if (current?.status === 'running' || current?.status === 'spawning') {
-            updateAgent(db, agent.id, { status: 'failed' })
-          }
-          if (agent.task_id) {
-            const tokens = parseTokensFromLog(workerLogPath(agent.id))
-            if (tokens.total_tokens !== undefined) {
-              updateTask(db, agent.task_id, tokens)
-            }
-          }
-        })
-      } else {
-        // Claude worker: uses ChildProcess with --mcp-config
-        const child = spawnWorker(spawnCfg)
-
-        if (child.pid !== undefined) {
-          updateAgent(db, agent.id, { pid: child.pid })
-        }
-
-        if (openTerminals) {
-          openWorkerTerminal(agent.id, workerLogPath(agent.id))
-        }
-
-        child.on('error', (err) => {
-          // spawn failed (e.g. 'claude' binary not found) — mark agent failed so
-          // the orchestrator can retry instead of waiting forever
-          console.error(`[spawner] Failed to launch worker ${agent.id}: ${err.message}`)
-          updateAgent(db, agent.id, { status: 'failed' })
-        })
-
-        child.on('exit', () => {
-          // If worker exited without calling report_done, mark agent as failed
-          const current = db.prepare(
-            "SELECT status FROM agents WHERE id = ?"
-          ).get(agent.id) as { status: string } | undefined
-          if (current?.status === 'running' || current?.status === 'spawning') {
-            updateAgent(db, agent.id, { status: 'failed' })
-          }
-          // Parse token usage from the worker log and store it on the task
-          if (agent.task_id) {
-            const tokens = parseTokensFromLog(workerLogPath(agent.id))
-            if (tokens.total_tokens !== undefined) {
-              updateTask(db, agent.task_id, tokens)
-            }
-          }
-        })
+      if (child.pid !== undefined) {
+        updateAgent(db, agent.id, { pid: child.pid })
       }
+
+      if (openTerminals) {
+        openWorkerTerminal(agent.id, workerLogPath(agent.id))
+      }
+
+      child.on('error', (err) => {
+        // spawn failed (e.g. 'claude' binary not found) — mark agent failed so
+        // the orchestrator can retry instead of waiting forever
+        console.error(`[spawner] Failed to launch worker ${agent.id}: ${err.message}`)
+        updateAgent(db, agent.id, { status: 'failed' })
+      })
+
+      child.on('exit', () => {
+        // If worker exited without calling report_done, mark agent as failed
+        const current = db.prepare(
+          "SELECT status FROM agents WHERE id = ?"
+        ).get(agent.id) as { status: string } | undefined
+        if (current?.status === 'running' || current?.status === 'spawning') {
+          updateAgent(db, agent.id, { status: 'failed' })
+        }
+        // Parse token usage from the worker log and store it on the task
+        if (agent.task_id) {
+          const tokens = parseTokensFromLog(workerLogPath(agent.id))
+          if (tokens.total_tokens !== undefined) {
+            updateTask(db, agent.task_id, tokens)
+          }
+        }
+      })
     }
   }, 1000)
 
@@ -218,13 +182,13 @@ async function main() {
   const subcommand = args[0] && !args[0].startsWith('--') ? args[0] : 'start'
 
   if (subcommand === 'init') {
-    const useCursor = args.includes('--cursor')
-    const useClaude = args.includes('--claude')
-    if (useCursor && useClaude) {
-      console.error('Error: --cursor and --claude are mutually exclusive.')
+    const useTmux = args.includes('--tmux')
+    const useSubprocess = args.includes('--subprocess')
+    if (useTmux && useSubprocess) {
+      console.error('Error: --tmux and --subprocess are mutually exclusive.')
       process.exit(1)
     }
-    const runtime = useCursor ? 'cursor' : 'claude'
+    const runtime: WorkerRuntime = useTmux ? 'tmux' : 'subprocess'
     runInit({ projectDir: process.cwd(), runtime })
     return
   }
@@ -242,8 +206,8 @@ async function main() {
   const workerRuntimeFlag = workerRuntimeArg
     ? (workerRuntimeArg.split('=')[1] as WorkerRuntime)
     : null
-  if (workerRuntimeFlag && workerRuntimeFlag !== 'claude' && workerRuntimeFlag !== 'cursor') {
-    console.error(`Error: --worker-runtime must be "claude" or "cursor", got "${workerRuntimeFlag}"`)
+  if (workerRuntimeFlag && workerRuntimeFlag !== 'subprocess' && workerRuntimeFlag !== 'tmux') {
+    console.error(`Error: --worker-runtime must be "subprocess" or "tmux", got "${workerRuntimeFlag}"`)
     process.exit(1)
   }
 
@@ -259,7 +223,7 @@ async function main() {
   // Read .multiclaude.json config early so we can route workers correctly.
   // --worker-runtime flag takes precedence over config file.
   const multiclaudeConfig = readConfig(process.cwd())
-  const effectiveRuntime: WorkerRuntime = workerRuntimeFlag ?? multiclaudeConfig?.workerRuntime ?? 'claude'
+  const effectiveRuntime: WorkerRuntime = workerRuntimeFlag ?? multiclaudeConfig?.workerRuntime ?? 'subprocess'
 
   console.log('Starting MultiClaude...')
 

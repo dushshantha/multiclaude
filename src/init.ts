@@ -29,33 +29,25 @@ export const MULTICLAUDE_PERMISSIONS = [
 
 export interface InitOptions {
   projectDir?: string
-  /** Worker runtime to use. Defaults to 'claude' for backwards compatibility. */
+  /** Worker runtime to use. Defaults to 'subprocess'. */
   runtime?: WorkerRuntime
 }
 
 export function runInit(opts: InitOptions = {}): void {
   const projectDir = resolve(opts.projectDir ?? process.cwd())
-  const runtime: WorkerRuntime = opts.runtime ?? 'claude'
+  const runtime: WorkerRuntime = opts.runtime ?? 'subprocess'
 
   writeConfig(projectDir, { workerRuntime: runtime })
   updateSettings(projectDir)
+  updateClaudeMd(projectDir)
 
-  if (runtime === 'cursor') {
-    updateCursorRules(projectDir)
-    console.log(`✓ MultiClaude initialized in ${projectDir} (Cursor mode)`)
-    console.log(`  .multiclaude.json — workerRuntime: cursor`)
-    console.log(`  .claude/settings.local.json — permissions added`)
-    console.log(`  .cursor/rules/multiclaude-orchestrator.mdc — orchestrator instructions added`)
-  } else {
-    updateClaudeMd(projectDir)
-    console.log(`✓ MultiClaude initialized in ${projectDir}`)
-    console.log(`  .multiclaude.json — workerRuntime: claude`)
-    console.log(`  .claude/settings.local.json — permissions added`)
-    console.log(`  CLAUDE.md — orchestrator instructions added`)
-  }
+  console.log(`✓ MultiClaude initialized in ${projectDir}`)
+  console.log(`  .multiclaude.json — workerRuntime: ${runtime}`)
+  console.log(`  .claude/settings.local.json — permissions added`)
+  console.log(`  CLAUDE.md — orchestrator instructions added`)
 
   console.log(`\nMake sure MultiClaude is running: multiclaude start`)
-  console.log('Then just run:                    ' + (runtime === 'cursor' ? 'cursor agent' : 'claude') + '   (from this directory)')
+  console.log('Then just run:                    claude   (from this directory)')
 }
 
 function updateSettings(projectDir: string): void {
