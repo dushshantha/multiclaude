@@ -20,13 +20,28 @@ export function readConfig(projectDir: string): MultiClaudeConfig | null {
   const configPath = join(projectDir, CONFIG_FILENAME)
   if (!existsSync(configPath)) return null
   try {
-    return JSON.parse(readFileSync(configPath, 'utf-8')) as MultiClaudeConfig
+    const parsed = JSON.parse(readFileSync(configPath, 'utf-8'))
+    if (parsed && typeof parsed === 'object') {
+      const { workerRuntime, stuckWarningMinutes, stuckTimeoutMinutes } = parsed
+      if (workerRuntime !== undefined && !isValidWorkerRuntime(workerRuntime)) {
+        throw new Error(`Invalid workerRuntime: "${workerRuntime}". Must be one of: ${VALID_WORKER_RUNTIMES.join(', ')}`)
+      }
+      return {
+        workerRuntime: (workerRuntime as WorkerRuntime) || 'subprocess',
+        stuckWarningMinutes,
+        stuckTimeoutMinutes,
+      }
+    }
+    return null
   } catch {
     return null
   }
 }
 
 export function writeConfig(projectDir: string, config: MultiClaudeConfig): void {
+  if (!isValidWorkerRuntime(config.workerRuntime)) {
+    throw new Error(`Invalid workerRuntime: "${config.workerRuntime}". Must be one of: ${VALID_WORKER_RUNTIMES.join(', ')}`)
+  }
   const configPath = join(projectDir, CONFIG_FILENAME)
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n')
 }
