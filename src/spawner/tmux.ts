@@ -82,6 +82,38 @@ export function sendTmuxKeys(target: string, command: string): void {
   execSync(`tmux send-keys -t ${shellQuote(target)} ${shellQuote(command)} Enter`, { stdio: 'pipe' })
 }
 
+export type ComposerState = 'empty' | 'pending' | 'unknown'
+
+/**
+ * Classifies the composer state from raw captured pane content.
+ *
+ * Returns:
+ * - 'unknown': pane shows a busy indicator (Claude is processing — can't tell composer state)
+ * - 'pending': submittedText is still visible in the cleaned composer area (not yet submitted)
+ * - 'empty': submittedText is gone (was submitted, or composer is idle)
+ *
+ * Handles four layout styles:
+ *   bordered      │ text │ — strips box-drawing before checking
+ *   ghost-text    SGR-2 dim placeholders — stripped before checking
+ *   busy-footer   "ESC to interrupt" indicator — returns 'unknown'
+ *   bare-prompt   plain "> " prompt with no decoration
+ */
+export function classifyComposerState(rawPane: string, submittedText: string): ComposerState {
+  // Busy-footer: Claude is actively processing; composer state is indeterminate
+  if (/ESC to interrupt/.test(rawPane)) {
+    return 'unknown'
+  }
+
+  // Clean: strip dim ghost text, box-drawing borders, remaining ANSI
+  const cleaned = cleanComposerLine(rawPane)
+
+  if (submittedText.length > 0 && cleaned.includes(submittedText)) {
+    return 'pending'
+  }
+
+  return 'empty'
+}
+
 /**
  * Strips dim/faint (SGR 2) regions from a string.
  * Removes everything from an SGR sequence containing attribute 2 (dim)
