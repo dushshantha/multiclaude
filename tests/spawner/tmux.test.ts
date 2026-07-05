@@ -26,6 +26,7 @@ import {
   getTmuxPanePid,
   sendTmuxKeys,
   writeLaunchScript,
+  captureTmuxPane,
 } from '../../src/spawner/tmux.js'
 
 describe('ensureTmuxSession', () => {
@@ -145,6 +146,50 @@ describe('sendTmuxKeys', () => {
     sendTmuxKeys('mysess:mywin', 'ls')
     const call = mockExecSync.mock.calls[0][0] as string
     expect(call).toContain('-t')
+  })
+})
+
+describe('captureTmuxPane', () => {
+  beforeEach(() => {
+    mockExecSync.mockReset()
+  })
+
+  it('runs capture-pane with the specified target', () => {
+    mockExecSync.mockReturnValueOnce('line1\nline2\n')
+    const result = captureTmuxPane('session:mc-task')
+    expect(result).toBe('line1\nline2\n')
+    const call = mockExecSync.mock.calls[0][0] as string
+    expect(call).toContain('capture-pane')
+    expect(call).toContain('-p')
+    expect(call).toContain('session:mc-task')
+  })
+
+  it('uses default of 40 lines when none specified', () => {
+    mockExecSync.mockReturnValueOnce('')
+    captureTmuxPane('sess:win')
+    const call = mockExecSync.mock.calls[0][0] as string
+    expect(call).toContain('-S -40')
+  })
+
+  it('uses the specified line count', () => {
+    mockExecSync.mockReturnValueOnce('')
+    captureTmuxPane('sess:win', 100)
+    const call = mockExecSync.mock.calls[0][0] as string
+    expect(call).toContain('-S -100')
+  })
+
+  it('returns empty string when tmux throws', () => {
+    mockExecSync.mockImplementationOnce(() => { throw new Error('no tmux') })
+    const result = captureTmuxPane('bad:target')
+    expect(result).toBe('')
+  })
+
+  it('shell-quotes target to handle special chars', () => {
+    mockExecSync.mockReturnValueOnce('')
+    captureTmuxPane("session:it's-special")
+    const call = mockExecSync.mock.calls[0][0] as string
+    // target should be quoted
+    expect(call).toContain("'session:it'\\''s-special'")
   })
 })
 

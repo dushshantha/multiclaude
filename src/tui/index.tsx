@@ -3,8 +3,10 @@ import { render, Box, Text, useInput, useApp } from 'ink'
 import { exec } from 'child_process'
 import { listTasks } from '../server/state/tasks.js'
 import { listAgents } from '../server/state/agents.js'
+import type { Agent } from '../server/state/agents.js'
 import { listRuns } from '../server/state/runs.js'
 import { workerLogPath } from '../spawner/index.js'
+import { captureTmuxPane } from '../spawner/tmux.js'
 import { calculateCost } from '../server/cost.js'
 import type { Task } from '../server/state/tasks.js'
 import type Database from 'better-sqlite3'
@@ -91,11 +93,14 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [latestLogs, setLatestLogs] = useState<Map<string, LatestLogRow>>(new Map())
   const [runTickets, setRunTickets] = useState<Map<string, string>>(new Map())
+  const [agentsByTaskId, setAgentsByTaskId] = useState<Map<string, Agent>>(new Map())
+  const [paneLines, setPaneLines] = useState<Map<string, string>>(new Map())
   const { exit } = useApp()
 
   useEffect(() => {
     const refresh = () => {
-      setTasks(listTasks(db))
+      const currentTasks = listTasks(db)
+      setTasks(currentTasks)
       const rows = db.prepare(LATEST_LOG_SQL).all() as LatestLogRow[]
       setLatestLogs(new Map(rows.map(r => [r.task_id, r])))
       const runs = listRuns(db)
@@ -104,6 +109,26 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
         if (run.external_ref) tickets.set(run.id, run.external_ref)
       }
       setRunTickets(tickets)
+
+      // Capture tmux pane content for running agents that have a pane target
+      const agents = listAgents(db)
+      const byTask = new Map<string, Agent>()
+      for (const a of agents) {
+        if (a.task_id) byTask.set(a.task_id, a)
+      }
+      setAgentsByTaskId(byTask)
+
+      const newPaneLines = new Map<string, string>()
+      for (const t of currentTasks) {
+        if (t.status !== 'in_progress') continue
+        const agent = byTask.get(t.id)
+        if (!agent?.tmux_pane) continue
+        const raw = captureTmuxPane(agent.tmux_pane, 5)
+        // Take the last non-empty line as the live status indicator
+        const lastLine = raw.split('\n').map(l => l.trimEnd()).filter(Boolean).pop() ?? ''
+        newPaneLines.set(t.id, lastLine)
+      }
+      setPaneLines(newPaneLines)
     }
     refresh()
     const interval = setInterval(refresh, refreshMs)
@@ -114,9 +139,6 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
     if (input === 'q') exit()
     if (input === 'w') openBrowser(WEB_DASHBOARD_URL)
   })
-
-  // suppress unused import warning
-  void listAgents
 
   const running = tasks.filter(t => t.status === 'in_progress').length
   const done = tasks.filter(t => t.status === 'done').length
@@ -190,7 +212,9 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
               </Box>
               {t.status === 'in_progress' && t.agent_id && (
                 <Box paddingLeft={3}>
-                  {logMsg ? (
+                  {paneLines.get(t.id) ? (
+                    <Text dimColor>↳ {paneLines.get(t.id)?.slice(0, 80)}</Text>
+                  ) : logMsg ? (
                     <Text dimColor>↳ {logMsg}{log?.created_at ? `  (last log ${formatTimeAgo(log.created_at)})` : ''}</Text>
                   ) : (
                     <Text dimColor>↳ tail -f {workerLogPath(t.agent_id)}</Text>

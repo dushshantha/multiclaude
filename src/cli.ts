@@ -146,6 +146,9 @@ function startSpawnerWatcher(
       if (handle.pid !== undefined) {
         updateAgent(db, agent.id, { pid: handle.pid })
       }
+      if (handle.tmuxPane !== undefined) {
+        updateAgent(db, agent.id, { tmux_pane: handle.tmuxPane })
+      }
 
       if (openTerminals) {
         openWorkerTerminal(agent.id, workerLogPath(agent.id))

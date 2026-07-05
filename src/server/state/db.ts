@@ -72,6 +72,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
   `)
   // Migrations: add columns that may be missing in older DBs
   try { db.exec("ALTER TABLE agents ADD COLUMN cwd TEXT") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE agents ADD COLUMN tmux_pane TEXT") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN started_at TEXT") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN duration_seconds REAL") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN input_tokens INTEGER") } catch { /* already exists */ }
