@@ -188,11 +188,15 @@ async function main() {
   if (subcommand === 'init') {
     const useCursor = args.includes('--cursor')
     const useClaude = args.includes('--claude')
-    if (useCursor && useClaude) {
-      console.error('Error: --cursor and --claude are mutually exclusive.')
+    const useTmux = args.includes('--tmux')
+    const runtimeCount = [useCursor, useClaude, useTmux].filter(Boolean).length
+    if (runtimeCount > 1) {
+      console.error('Error: --cursor, --claude, and --tmux are mutually exclusive.')
       process.exit(1)
     }
-    const runtime = useCursor ? 'cursor' : 'claude'
+    let runtime: WorkerRuntime = 'claude'
+    if (useCursor) runtime = 'cursor'
+    else if (useTmux) runtime = 'tmux'
     runInit({ projectDir: process.cwd(), runtime })
     return
   }

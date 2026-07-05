@@ -46,16 +46,27 @@ export function runInit(opts: InitOptions = {}): void {
     console.log(`  .multiclaude.json — workerRuntime: cursor`)
     console.log(`  .claude/settings.local.json — permissions added`)
     console.log(`  .cursor/rules/multiclaude-orchestrator.mdc — orchestrator instructions added`)
+    console.log(`\nMake sure MultiClaude is running: multiclaude start`)
+    console.log('Then just run:                    cursor agent   (from this directory)')
+  } else if (runtime === 'tmux') {
+    updateClaudeMd(projectDir)
+    console.log(`✓ MultiClaude initialized in ${projectDir} (tmux mode)`)
+    console.log(`  .multiclaude.json — workerRuntime: tmux`)
+    console.log(`  .claude/settings.local.json — permissions added`)
+    console.log(`  CLAUDE.md — orchestrator instructions added`)
+    console.log(`\nMake sure MultiClaude is running: multiclaude start`)
+    console.log('Then just run:                    claude   (from this directory)')
+    console.log(`\nWorkers will spawn in tmux windows named mc-<taskId>. Attach with:`)
+    console.log(`  tmux attach -t multiclaude:mc-<taskId>`)
   } else {
     updateClaudeMd(projectDir)
     console.log(`✓ MultiClaude initialized in ${projectDir}`)
     console.log(`  .multiclaude.json — workerRuntime: claude`)
     console.log(`  .claude/settings.local.json — permissions added`)
     console.log(`  CLAUDE.md — orchestrator instructions added`)
+    console.log(`\nMake sure MultiClaude is running: multiclaude start`)
+    console.log('Then just run:                    claude   (from this directory)')
   }
-
-  console.log(`\nMake sure MultiClaude is running: multiclaude start`)
-  console.log('Then just run:                    ' + (runtime === 'cursor' ? 'cursor agent' : 'claude') + '   (from this directory)')
 }
 
 function updateSettings(projectDir: string): void {

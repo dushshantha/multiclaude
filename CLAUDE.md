@@ -90,6 +90,34 @@ subprocess exits without calling `report_done` → spawner watcher marks agent `
 
 Uses `StreamableHTTPServerTransport` (Streamable HTTP, not SSE). Each request to `/orchestrator` or `/worker` either creates a new session (no `mcp-session-id` header) or routes to an existing one. OAuth is implemented in-memory with auto-approve — suitable for localhost only.
 
+### Worker runtime backends
+
+MultiClaude supports multiple **runtime backends** that determine how and where worker agents are launched. Choose via `.multiclaude.json`:
+
+```json
+{
+  "workerRuntime": "claude"
+}
+```
+
+**Available runtimes:**
+
+| Backend | Setting | Requires | Use case |
+|---|---|---|---|
+| **Claude Code (default)** | `"claude"` | Claude Code CLI (`claude`) | Standard local subprocess spawning. Workers run attached to the orchestrator's node process. Exit detection via child process events. |
+| **Cursor Agent** | `"cursor"` | Cursor CLI + Cursor Pro/Business subscription | Cursor Agent CLI workers. Uses pseudo-TTY (node-pty) to satisfy Cursor's PTY requirement. |
+| **tmux** | `"tmux"` | tmux | Workers spawn in tmux windows. Attachable and supervizable; no parent process relationship required. Useful for long-running tasks you want to peek at. |
+
+**tmux backend details:**
+
+When `workerRuntime: "tmux"`:
+- Each worker launches in a tmux window named `mc-<taskId>` in the current session (if inside tmux, via `$TMUX`) or a detached session named `multiclaude`
+- The window is rooted at the task's worktree directory
+- Workers are fully attachable: `tmux attach -t multiclaude:mc-<taskId>` to see the agent running interactively
+- Supervision is achieved via tmux signals: a monitor process (`tmux wait-for`) blocks until the worker's claude subprocess exits in the pane, unblocking `wait_for_event()` in the orchestrator
+- **Peek:** Attach to the window to watch progress (non-intrusive observation)
+- **Send:** Use `tmux send-keys -t <window> <command> Enter` to send commands to the pane if you need to interact with the agent
+
 ### ESM
 
 `"type": "module"` in package.json. Use `.js` extensions in all import paths even for `.ts` sources. Use `fileURLToPath(new URL('.', import.meta.url))` instead of `__dirname`.

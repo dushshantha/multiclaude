@@ -141,6 +141,59 @@ Work on all open GitHub issues and create PRs as you go
 
 The orchestrator will break each of these into parallel tasks, show you the dependency graph, and ask for your approval before spawning any workers. You can revise the plan before it starts.
 
+## Using tmux for Worker Visibility
+
+MultiClaude can spawn workers in tmux windows, making them fully attachable and supervizable. This is useful for long-running tasks where you want to monitor progress interactively without intrusion.
+
+### Setup
+
+1. Ensure tmux is installed: `brew install tmux` (macOS) or `apt-get install tmux` (Linux)
+2. In your project directory: `multiclaude init` (uses Claude Code by default)
+3. Edit `.multiclaude.json` and set:
+   ```json
+   {
+     "workerRuntime": "tmux"
+   }
+   ```
+
+### Running with tmux
+
+Start the orchestrator as usual:
+```bash
+multiclaude start
+claude  # (from your project directory)
+```
+
+As workers spawn, they appear as tmux windows in the active session (or in a detached `multiclaude` session if not inside tmux).
+
+### Attaching to a Worker
+
+While a task is running, attach to its window to see the agent live:
+```bash
+# Find the window name from the TUI or web dashboard, then:
+tmux attach -t multiclaude:mc-<taskId>
+```
+
+Replace `<taskId>` with the task ID shown in the dashboard (e.g., `mc-design-schema`, `mc-implement-auth`).
+
+Inside the window you'll see:
+- The agent's reasoning and tool calls (streamed as it works)
+- MCP tool calls and results
+- Real-time progress
+
+Press `Ctrl+b d` to detach without killing the worker.
+
+### Supervision Model
+
+**Peek:** Attach to a window at any time — your attachment doesn't affect the agent's execution. Detaching is non-disruptive.
+
+**Send:** If you need to interact with the agent (e.g., copy-paste commands, approve a prompt), use tmux's `send-keys`:
+```bash
+tmux send-keys -t multiclaude:mc-<taskId> "your command here" Enter
+```
+
+Exit detection happens via tmux signals: the orchestrator's monitor process (`tmux wait-for`) blocks until the worker's claude subprocess exits the pane, then unblocks `wait_for_event()` to spawn the next wave of workers. This means workers are completely detached from the orchestrator's node process — no orphaning if you kill the orchestrator.
+
 ## Using Cursor Agent
 
 MultiClaude supports [Cursor Agent CLI](https://cursor.com) as an alternative to Claude Code for both the orchestrator and worker agents.
