@@ -1,6 +1,7 @@
 import type { SpawnConfig } from './index.js'
 import { spawnWorker } from './index.js'
 import { spawnCursorWorker } from './cursor.js'
+import { spawnTmuxWorker } from './tmux.js'
 import type { WorkerRuntime } from '../config.js'
 
 export interface WorkerHandle {
@@ -41,6 +42,12 @@ export class CursorBackend implements RuntimeBackend {
   }
 }
 
+export class TmuxBackend implements RuntimeBackend {
+  launch(cfg: SpawnConfig): WorkerHandle {
+    return spawnTmuxWorker(cfg)
+  }
+}
+
 export interface BackendOptions {
   serverPort?: number
 }
@@ -55,7 +62,7 @@ export function createBackend(runtime: WorkerRuntime, opts: BackendOptions = {})
       }
       return new CursorBackend({ serverPort: opts.serverPort })
     case 'tmux':
-      throw new Error('tmux runtime backend is not yet implemented')
+      return new TmuxBackend()
     default: {
       const _exhaustive: never = runtime
       throw new Error(`Unknown runtime: ${_exhaustive}`)
