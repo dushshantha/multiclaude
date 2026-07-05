@@ -8,6 +8,7 @@ export interface Agent {
   pid: number | null
   status: AgentStatus
   cwd: string | null
+  tmux_pane: string | null
   created_at: string
 }
 
@@ -24,12 +25,13 @@ export function getAgent(db: Database.Database, id: string): Agent | null {
   return (db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as Agent | undefined) ?? null
 }
 
-export function updateAgent(db: Database.Database, id: string, input: { status?: AgentStatus; pid?: number; cwd?: string }): void {
+export function updateAgent(db: Database.Database, id: string, input: { status?: AgentStatus; pid?: number; cwd?: string; tmux_pane?: string }): void {
   const sets: string[] = []
   const params: Record<string, unknown> = { id }
   if (input.status !== undefined) { sets.push('status = @status'); params.status = input.status }
   if (input.pid !== undefined) { sets.push('pid = @pid'); params.pid = input.pid }
   if (input.cwd !== undefined) { sets.push('cwd = @cwd'); params.cwd = input.cwd }
+  if (input.tmux_pane !== undefined) { sets.push('tmux_pane = @tmux_pane'); params.tmux_pane = input.tmux_pane }
   if (sets.length === 0) return
   db.prepare(`UPDATE agents SET ${sets.join(', ')} WHERE id = @id`).run(params)
 }
