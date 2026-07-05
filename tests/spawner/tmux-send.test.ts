@@ -23,6 +23,7 @@ import {
   cleanComposerLine,
   capturePaneText,
   sendToPane,
+  classifyComposerState,
 } from '../../src/spawner/tmux.js'
 
 describe('stripAnsiDim', () => {
@@ -215,5 +216,105 @@ describe('sendToPane', () => {
 
     const result = sendToPane('sess:win', 'test message', { retryDelayMs: 0 })
     expect(result.sent).toBe(true)
+  })
+})
+
+describe('classifyComposerState', () => {
+  // --- busy-footer cases ---
+
+  it('returns unknown when pane shows ESC to interrupt (busy-footer)', () => {
+    const pane = 'claude is thinking...\nESC to interrupt\n'
+    expect(classifyComposerState(pane, 'my text')).toBe('unknown')
+  })
+
+  it('returns unknown even if text is present when busy-footer is visible', () => {
+    // Text might still be in the pane but Claude is processing — indeterminate
+    const pane = 'my text\nESC to interrupt\n'
+    expect(classifyComposerState(pane, 'my text')).toBe('unknown')
+  })
+
+  // --- bordered cases ---
+
+  it('returns empty for bordered composer with only ghost-text placeholder', () => {
+    // │ [ghost dim placeholder] │ — borders + dim, no real user text
+    const pane = '│ \x1b[2mType a message…\x1b[22m │'
+    expect(classifyComposerState(pane, 'hello world')).toBe('empty')
+  })
+
+  it('returns pending for bordered composer with user text inside', () => {
+    // │ hello world │ — the text is genuinely there
+    const pane = '│ hello world │'
+    expect(classifyComposerState(pane, 'hello world')).toBe('pending')
+  })
+
+  it('returns empty for bordered composer that is truly empty (no text, no ghost)', () => {
+    const pane = '│  │'
+    expect(classifyComposerState(pane, 'hello world')).toBe('empty')
+  })
+
+  it('returns pending for bordered composer using heavy-line box-drawing (┃)', () => {
+    const pane = '┃ hello world ┃'
+    expect(classifyComposerState(pane, 'hello world')).toBe('pending')
+  })
+
+  // --- ghost-text cases ---
+
+  it('returns empty when pane contains only dim ghost-text placeholder (no real input)', () => {
+    // Entire composer content is dim placeholder — stripped → empty
+    const pane = '\x1b[2mType a message here\x1b[22m'
+    expect(classifyComposerState(pane, 'hello world')).toBe('empty')
+  })
+
+  it('returns pending when real text follows ghost placeholder', () => {
+    // Ghost placeholder + actual user content
+    const pane = '\x1b[2mhint\x1b[22m hello world'
+    expect(classifyComposerState(pane, 'hello world')).toBe('pending')
+  })
+
+  it('returns empty when ghost-text alone matches the submitted text after stripping', () => {
+    // The submitted text matches ghost placeholder text — strip dim → becomes empty
+    const pane = '\x1b[2mhello world\x1b[22m'
+    expect(classifyComposerState(pane, 'hello world')).toBe('empty')
+  })
+
+  // --- bare-prompt cases ---
+
+  it('returns pending for bare prompt with user text', () => {
+    // Simple > prompt, text visible, no decoration
+    const pane = '> hello world'
+    expect(classifyComposerState(pane, 'hello world')).toBe('pending')
+  })
+
+  it('returns empty for bare prompt with no text', () => {
+    const pane = '> '
+    expect(classifyComposerState(pane, 'hello world')).toBe('empty')
+  })
+
+  it('returns empty for bare prompt where text was submitted (pane scrolled)', () => {
+    // After submission the composer is cleared
+    const pane = '❯ '
+    expect(classifyComposerState(pane, 'hello world')).toBe('empty')
+  })
+
+  it('returns pending for bare prompt with text and ANSI colors', () => {
+    const pane = '> \x1b[32mhello world\x1b[0m'
+    expect(classifyComposerState(pane, 'hello world')).toBe('pending')
+  })
+
+  // --- edge cases ---
+
+  it('returns empty for completely empty pane', () => {
+    expect(classifyComposerState('', 'hello world')).toBe('empty')
+  })
+
+  it('returns empty when submittedText is empty string', () => {
+    // Empty submitted text — nothing to look for → always empty
+    expect(classifyComposerState('some content here', '')).toBe('empty')
+  })
+
+  it('returns pending for multi-line pane where text appears on any line', () => {
+    // Full pane capture includes many lines; the composer line has our text
+    const pane = 'previous output line\nanother line\n> hello world\n'
+    expect(classifyComposerState(pane, 'hello world')).toBe('pending')
   })
 })
