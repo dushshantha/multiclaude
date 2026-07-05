@@ -41,7 +41,8 @@ export function runInit(opts: InitOptions = {}): void {
   updateSettings(projectDir)
   updateClaudeMd(projectDir)
 
-  console.log(`✓ MultiClaude initialized in ${projectDir}`)
+  const modeLabel = runtime === 'tmux' ? '(tmux mode)' : ''
+  console.log(`✓ MultiClaude initialized in ${projectDir} ${modeLabel}`)
   console.log(`  .multiclaude.json — workerRuntime: ${runtime}`)
   console.log(`  .claude/settings.local.json — permissions added`)
   console.log(`  CLAUDE.md — orchestrator instructions added`)
