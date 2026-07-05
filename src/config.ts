@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 
-export type WorkerRuntime = 'claude' | 'cursor'
+export type WorkerRuntime = 'claude' | 'cursor' | 'tmux'
 
 export interface MultiClaudeConfig {
   workerRuntime: WorkerRuntime
