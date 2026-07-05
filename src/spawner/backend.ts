@@ -6,6 +6,7 @@ import type { WorkerRuntime } from '../config.js'
 
 export interface WorkerHandle {
   pid: number | undefined
+  tmuxPane?: string
   onExit(callback: () => void): void
   onError(callback: (err: Error) => void): void
 }

@@ -3,10 +3,11 @@ import { join } from 'path'
 import { fileURLToPath } from 'url'
 import type Database from 'better-sqlite3'
 import { listTasks } from '../server/state/tasks.js'
-import { listAgents } from '../server/state/agents.js'
+import { listAgents, getAgent } from '../server/state/agents.js'
 import { listProjects, getProject } from '../server/state/projects.js'
 import { listRunsWithStats, getRun } from '../server/state/runs.js'
 import { workerLogPath } from '../spawner/index.js'
+import { captureTmuxPane } from '../spawner/tmux.js'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -35,8 +36,10 @@ function getSnapshot(db: Database.Database) {
   }
   // Add log file paths for agents that have been spawned
   const agentLogPaths: Record<string, string> = {}
+  const agentTmuxPanes: Record<string, string> = {}
   for (const agent of agents) {
     agentLogPaths[agent.id] = workerLogPath(agent.id)
+    if (agent.tmux_pane) agentTmuxPanes[agent.id] = agent.tmux_pane
   }
   const projects = listProjects(db)
   return {
@@ -45,6 +48,7 @@ function getSnapshot(db: Database.Database) {
     edges: db.prepare('SELECT * FROM dag_edges').all(),
     logsByTask,
     agentLogPaths,
+    agentTmuxPanes,
     projects,
   }
 }
@@ -161,6 +165,18 @@ export function startWebServer(db: Database.Database, port = 3000): void {
     send()
     const interval = setInterval(send, 1000)
     req.on('close', () => clearInterval(interval))
+  })
+
+  // Pane capture: GET /api/peek/:agentId?lines=<n>
+  app.get('/api/peek/:agentId', (req, res) => {
+    const agent = getAgent(db, req.params['agentId'])
+    if (!agent?.tmux_pane) {
+      res.json({ pane: null, content: '' })
+      return
+    }
+    const lines = Math.min(parseInt((req.query['lines'] as string) || '40', 10), 200)
+    const content = captureTmuxPane(agent.tmux_pane, lines)
+    res.json({ pane: agent.tmux_pane, content })
   })
 
   // Page routes — serve HTML files from public/

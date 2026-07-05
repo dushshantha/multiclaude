@@ -6,6 +6,21 @@ import type { SpawnConfig } from './index.js'
 import { buildWorkerArgs, buildWorkerEnv } from './index.js'
 import type { WorkerHandle } from './backend.js'
 
+/**
+ * Captures the last `lines` lines of a tmux pane using capture-pane.
+ * Returns empty string if tmux is unavailable or the target doesn't exist.
+ */
+export function captureTmuxPane(target: string, lines: number = 40): string {
+  try {
+    return execSync(
+      `tmux capture-pane -p -t ${shellQuote(target)} -S -${lines}`,
+      { encoding: 'utf8', stdio: 'pipe' }
+    )
+  } catch {
+    return ''
+  }
+}
+
 /** Single-quote a string for POSIX shell — handles embedded single quotes. */
 function shellQuote(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'"
@@ -238,6 +253,7 @@ export function spawnTmuxWorker(cfg: SpawnConfig): WorkerHandle {
 
   return {
     pid: panePid,
+    tmuxPane: windowTarget,
     onExit(cb) { monitor.on('exit', cb) },
     onError(cb) { monitor.on('error', cb) },
   }
