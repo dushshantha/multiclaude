@@ -192,13 +192,86 @@ On `multiclaude start`, the server also writes:
 | Init flag | `--claude` (default) | `--cursor` |
 | System instructions | `CLAUDE.md` | `.cursor/rules/*.mdc` |
 
+## Tmux Worker Runtime
+
+MultiClaude can run worker agents inside tmux windows instead of detached subprocesses, giving you full terminal access to each worker.
+
+### Prerequisites
+
+- tmux installed and available on your `$PATH`
+
+### Setup
+
+```bash
+# In your project directory, init as usual (tmux workers still use the claude CLI):
+multiclaude init
+
+# Then edit .multiclaude.json to set the runtime:
+# { "workerRuntime": "tmux" }
+```
+
+Or pass the flag at server start time (overrides `.multiclaude.json`):
+
+```bash
+multiclaude start --worker-runtime=tmux
+```
+
+### How it works
+
+Each worker launches inside its own tmux window named `mc-<taskId>`. The spawner:
+1. Reuses the active tmux session when `$TMUX` is set, otherwise creates (or reuses) a detached `multiclaude` session.
+2. Opens a window named `mc-<taskId>` rooted at the worker's git worktree.
+3. Writes a `worker-launch.sh` script into `.claude/` and sends it to the pane via `send-keys`.
+4. Monitors exit via `tmux wait-for` so the spawner watcher detects when the worker finishes.
+
+### Attaching to a worker
+
+```bash
+# If multiclaude was launched outside tmux:
+tmux attach -t multiclaude
+
+# If you're already inside tmux, list windows and select mc-<taskId>:
+# Ctrl-b w
+```
+
+Each worker's output is visible in its own window. You can scroll, copy, and interact with it like any normal tmux window.
+
+### Observability
+
+**TUI:** For each running tmux worker, the TUI polls `tmux capture-pane` every second and shows the last non-empty line below the task row (`↳ <last pane line>`). If the pane is unavailable, it falls back to the last MCP log entry.
+
+**Web dashboard:** The run detail page (`http://localhost:7433/runs/<id>`) shows a **PANE** tab for tasks that have a tmux pane. It polls `GET /api/peek/:agentId` every 2 seconds and renders the pane output line by line. The **LOGS** tab remains available alongside it.
+
+**Send/steer channel:** `sendToPane()` in `src/spawner/tmux.ts` provides a programmatic way to type text into a worker's pane and verify it was submitted. It handles four Claude Code composer layouts (bordered box-drawing, dim ghost-text placeholders, busy-footer, bare prompt) and retries pressing Enter without retyping the text if the composer still shows the input after the first keystroke.
+
+### Busy-footer detection
+
+The stuck-watcher reads the last 6 non-blank lines of a tmux worker's pane before evaluating whether it is stuck. If the pane shows a Claude Code busy indicator (`ESC to interrupt` or `working...`), the worker is considered mid-turn and the stuck timer is reset. This prevents false timeouts when a worker is doing a long computation but hasn't logged a progress update recently.
+
+### Testing the tmux backend
+
+```bash
+npm test                                      # run the full suite (214 tests)
+npx vitest run tests/spawner/tmux.test.ts     # core tmux functions (session, window, PID, send-keys, spawn)
+npx vitest run tests/spawner/tmux-send.test.ts  # sendToPane + classifyComposerState (all layout variants)
+npx vitest run tests/spawner/backend.test.ts  # backend seam: createBackend returns the right class
+npx vitest run tests/spawner/stuck-watcher.test.ts  # busy-footer skip logic
+```
+
+**Manual attach walkthrough:**
+1. Start `multiclaude start --worker-runtime=tmux` in one terminal.
+2. In your project directory, run `claude` (the orchestrator) and give it a task.
+3. As workers spawn, you should see tmux windows appear: `tmux list-windows -t multiclaude`.
+4. Attach: `tmux attach -t multiclaude`, then switch to any `mc-<taskId>` window to watch the agent live.
+5. When the worker calls `report_done`, its window remains open — you can review its output before cleaning up.
+
 ## Run Tests
 
 ```bash
 npm test
 ```
 
-31 tests across state management, DAG engine, MCP tool handlers, git worktrees, and the server.
+214 tests across state management, DAG engine, MCP tool handlers, git worktrees, spawner backends, and the coordination server.
 
 ## Project Structure
 
@@ -217,7 +290,9 @@ src/
   git/
     worktree.ts           # createWorktree, removeWorktree
     merge.ts              # ensureIntegrationBranch, mergeWorktreeBranch
-  spawner/index.ts        # spawnWorker, buildWorkerMcpConfig
+  spawner/index.ts        # spawnWorker (process backend), buildWorkerMcpConfig
+  spawner/tmux.ts         # tmux worker backend: session/window management, pane capture, sendToPane
+  spawner/backend.ts      # runtime backend seam: ProcessBackend | CursorBackend | TmuxBackend
   tui/index.tsx           # Ink TUI dashboard
   web/server.ts           # Web dashboard (SSE live updates)
   cli.ts                  # Entry point
