@@ -157,6 +157,12 @@ function startSpawnerWatcher(
       handle.onError((err) => {
         console.error(`[spawner] Failed to launch worker ${agent.id}: ${err.message}`)
         updateAgent(db, agent.id, { status: 'failed' })
+        if (agent.task_id) {
+          const t = getTask(db, agent.task_id)
+          if (t && t.status !== 'done') {
+            updateTask(db, agent.task_id, { status: 'failed' })
+          }
+        }
       })
 
       handle.onExit(() => {
@@ -165,6 +171,12 @@ function startSpawnerWatcher(
         ).get(agent.id) as { status: string } | undefined
         if (current?.status === 'running' || current?.status === 'spawning') {
           updateAgent(db, agent.id, { status: 'failed' })
+          if (agent.task_id) {
+            const t = getTask(db, agent.task_id)
+            if (t && t.status !== 'done') {
+              updateTask(db, agent.task_id, { status: 'failed' })
+            }
+          }
         }
         if (agent.task_id) {
           const tokens = parseTokensFromLog(workerLogPath(agent.id))
