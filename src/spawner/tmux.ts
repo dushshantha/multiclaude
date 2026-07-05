@@ -68,6 +68,106 @@ export function sendTmuxKeys(target: string, command: string): void {
 }
 
 /**
+ * Strips dim/faint (SGR 2) regions from a string.
+ * Removes everything from an SGR sequence containing attribute 2 (dim)
+ * until the next SGR 22 (normal intensity) or SGR 0 (full reset).
+ */
+export function stripAnsiDim(s: string): string {
+  // Match SGR sequences that set dim (attribute 2 alone or in a list like 1;2)
+  // and remove everything until the closing SGR 22 or SGR 0, or end-of-string.
+  return s.replace(/\x1b\[(?:\d+;)*2(?:;\d+)*m(?:(?!\x1b\[(?:22|0)m)[\s\S])*(?:\x1b\[(?:22|0)m)?/g, '')
+}
+
+/**
+ * Strips box-drawing border characters: │ (U+2502), ┃ (U+2503), and ASCII |.
+ */
+export function stripBoxDrawing(s: string): string {
+  return s.replace(/[│┃|]/g, '')
+}
+
+/**
+ * Cleans a captured composer line: strips dim ghost text, box-drawing borders,
+ * all remaining ANSI escape sequences, and trims whitespace.
+ */
+export function cleanComposerLine(s: string): string {
+  let cleaned = stripAnsiDim(s)
+  cleaned = stripBoxDrawing(cleaned)
+  // Strip all remaining ANSI escape sequences
+  cleaned = cleaned.replace(/\x1b\[[0-9;]*m/g, '')
+  return cleaned.trim()
+}
+
+/**
+ * Captures the visible text of a tmux pane, including ANSI escape sequences.
+ * Returns the raw captured text, or empty string on failure.
+ */
+export function capturePaneText(target: string): string {
+  try {
+    return execSync(
+      `tmux capture-pane -e -p -t ${shellQuote(target)}`,
+      { encoding: 'utf8', stdio: 'pipe' }
+    ).trim()
+  } catch {
+    return ''
+  }
+}
+
+export interface SendToPaneOptions {
+  maxEnterRetries?: number
+  retryDelayMs?: number
+}
+
+export interface SendToPaneResult {
+  sent: boolean
+  enterRetries: number
+}
+
+/**
+ * Sends text to a tmux pane and verifies it was submitted.
+ *
+ * Types the text via send-keys, presses Enter, then uses capture-pane -e to
+ * read back the pane content. If the typed text is still visible in the
+ * composer (after stripping dim ghost text and box-drawing borders), retries
+ * pressing Enter — never retypes the text.
+ *
+ * This avoids two known failure modes:
+ *   1. Bordered-empty composer misread as "text pending" (box chars stripped)
+ *   2. Dim ghost/placeholder text misread as human input (SGR 2 stripped)
+ */
+export function sendToPane(
+  target: string,
+  text: string,
+  opts: SendToPaneOptions = {},
+): SendToPaneResult {
+  const maxRetries = opts.maxEnterRetries ?? 3
+  const retryDelay = opts.retryDelayMs ?? 100
+
+  // Type the text (without Enter)
+  execSync(`tmux send-keys -t ${shellQuote(target)} ${shellQuote(text)}`, { stdio: 'pipe' })
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Press Enter
+    execSync(`tmux send-keys -t ${shellQuote(target)} Enter`, { stdio: 'pipe' })
+
+    // Brief pause to let the pane process the keystroke
+    if (retryDelay > 0) {
+      execSync(`sleep ${retryDelay / 1000}`, { stdio: 'pipe' })
+    }
+
+    // Capture the pane and check if text is still in the composer
+    const raw = capturePaneText(target)
+    const cleaned = cleanComposerLine(raw)
+
+    // If the cleaned pane content no longer contains our text, it was submitted
+    if (!cleaned.includes(text)) {
+      return { sent: true, enterRetries: attempt }
+    }
+  }
+
+  return { sent: false, enterRetries: maxRetries }
+}
+
+/**
  * Writes a self-contained bash launch script for the worker into the worktree's
  * .claude directory. Returns the script path.
  *
