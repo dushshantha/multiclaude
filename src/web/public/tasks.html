@@ -65,7 +65,11 @@
     .cost-val { color: #34d399; }
     .duration { color: #94a3b8; }
     .token-detail { font-size: 11px; color: #666; margin-top: 2px; }
+    .dag-section { margin-bottom: 24px; }
+    .dag-section h2 { font-size: 13px; color: #555; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+    #dag-container { overflow: auto; background: #0d0d1f; border-radius: 8px; padding: 16px; max-height: 500px; }
   </style>
+  <script src="/dag-graph.js"></script>
 </head>
 <body>
   <h1>MultiClaude</h1>
@@ -81,6 +85,10 @@
     <div class="stat pending"><div class="count" id="pending">0</div><div class="label">Pending</div></div>
     <div class="stat tokens"><div class="count" id="total-tokens">0</div><div class="label">Tokens</div></div>
     <div class="stat cost"><div class="count" id="total-cost">$0</div><div class="label">Cost</div></div>
+  </div>
+  <div class="dag-section" id="dag-section" style="display:none">
+    <h2>Task Graph</h2>
+    <div id="dag-container"></div>
   </div>
   <table>
     <thead>
@@ -310,6 +318,17 @@
       }
     }
 
+    function updateDag(tasks, edges) {
+      const dagSection = document.getElementById('dag-section')
+      const dagContainer = document.getElementById('dag-container')
+      if (!tasks || tasks.length === 0 || !edges || edges.length === 0) {
+        dagSection.style.display = 'none'
+        return
+      }
+      dagSection.style.display = ''
+      renderDag(dagContainer, tasks, edges)
+    }
+
     const es = new EventSource('/api/events')
     es.onmessage = ({ data }) => {
       const newData = JSON.parse(data)
@@ -317,6 +336,7 @@
       const tasksChanged = !latestData || JSON.stringify(newData.tasks) !== JSON.stringify(latestData.tasks)
       if (tasksChanged) render(newData)
       else latestData = newData
+      updateDag(newData.tasks, newData.edges)
     }
   </script>
 </body>
