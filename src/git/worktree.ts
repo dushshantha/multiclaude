@@ -53,12 +53,33 @@ export async function createWorktree(repoPath: string, taskId: string, taskTitle
   const branch = taskTitle ? branchNameFromTitle(taskTitle, taskId) : `mc/${taskId}`
   const worktreePath = mkdtempSync(join(tmpdir(), `mc-${taskId}-`))
   const git = simpleGit(repoPath)
+
+  // Clean up stale worktree/branch from a prior failed attempt (idempotent)
+  const worktreeList = await git.raw(['worktree', 'list', '--porcelain'])
+  const staleWorktreePath = parseWorktreePathForBranch(worktreeList, branch)
+  if (staleWorktreePath) {
+    await git.raw(['worktree', 'remove', '--force', staleWorktreePath]).catch(() => {})
+    await rm(staleWorktreePath, { recursive: true, force: true }).catch(() => {})
+  }
+  await git.raw(['branch', '-D', branch]).catch(() => {})
+
   if (baseBranch) {
     await git.raw(['worktree', 'add', '-b', branch, worktreePath, baseBranch])
   } else {
     await git.raw(['worktree', 'add', '-b', branch, worktreePath])
   }
   return { path: worktreePath, branch, taskId }
+}
+
+function parseWorktreePathForBranch(porcelainOutput: string, branch: string): string | null {
+  const entries = porcelainOutput.split('\n\n')
+  for (const entry of entries) {
+    if (entry.includes(`branch refs/heads/${branch}`)) {
+      const pathLine = entry.split('\n').find(l => l.startsWith('worktree '))
+      if (pathLine) return pathLine.slice('worktree '.length)
+    }
+  }
+  return null
 }
 
 export async function removeWorktree(repoPath: string, info: WorktreeInfo): Promise<void> {
