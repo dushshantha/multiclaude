@@ -48,10 +48,15 @@ export function runInit(opts: InitOptions = {}): void {
     console.log(`  .cursor/rules/multiclaude-orchestrator.mdc — orchestrator instructions added`)
   } else {
     updateClaudeMd(projectDir)
-    console.log(`✓ MultiClaude initialized in ${projectDir}`)
-    console.log(`  .multiclaude.json — workerRuntime: claude`)
+    const suffix = runtime === 'tmux' ? ' (tmux mode)' : ''
+    console.log(`✓ MultiClaude initialized in ${projectDir}${suffix}`)
+    console.log(`  .multiclaude.json — workerRuntime: ${runtime}`)
     console.log(`  .claude/settings.local.json — permissions added`)
     console.log(`  CLAUDE.md — orchestrator instructions added`)
+    if (runtime === 'tmux') {
+      console.log(`\nWorkers will run inside tmux windows named mc-<taskId>.`)
+      console.log(`Attach with: tmux attach -t multiclaude`)
+    }
   }
 
   console.log(`\nMake sure MultiClaude is running: multiclaude start`)

@@ -52,7 +52,14 @@ src/spawner/index.ts     spawnWorker(): launches `claude` subprocess with --mcp-
                          --dangerously-skip-permissions, and a prompt injected via CLI arg.
                          Writes .claude/settings.local.json into the worktree before spawning.
 src/spawner/cursor.ts    Cursor worker variant — uses node-pty for PTY requirement.
+src/spawner/tmux.ts      Tmux worker backend: ensureTmuxSession, createTmuxWindow, spawnTmuxWorker,
+                         captureTmuxPane, sendToPane (with composer-submit robustness), and
+                         classifyComposerState (busy-footer / pending / empty detection).
+src/spawner/backend.ts   Runtime backend seam: ProcessBackend | CursorBackend | TmuxBackend,
+                         selected via createBackend(runtime) based on .multiclaude.json config.
 src/spawner/stuck-watcher.ts  Detects agents that haven't progressed past thresholds.
+                         For tmux workers, checks captureTmuxPane output for a busy footer
+                         ("ESC to interrupt") before classifying a worker as stuck.
 
 src/git/worktree.ts      createWorktree / removeWorktree using git worktree add.
                          branchNameFromTitle() derives branch names from task titles.
@@ -68,7 +75,7 @@ src/web/server.ts        Express web dashboard with SSE live updates on port 743
 
 prompts/orchestrator.md  System prompt injected into CLAUDE.md of target projects.
 prompts/worker.md        System prompt passed as CLI arg to each worker subprocess.
-tests/                   Vitest test suite (31 tests).
+tests/                   Vitest test suite (214 tests across 20 files).
 ```
 
 ### Git isolation model
@@ -85,6 +92,31 @@ worker calls `report_done` → `handleReportDone` in [worker.ts](src/server/tool
 
 **Retry flow:**
 subprocess exits without calling `report_done` → spawner watcher marks agent `failed` → spawner watcher auto-retries up to `max_retries` (default 3) times → on final failure, orchestrator escalates to user
+
+### Tmux worker runtime
+
+Set `workerRuntime: "tmux"` in `.multiclaude.json` (or pass `--worker-runtime=tmux` to `multiclaude start`) to run workers inside tmux windows instead of detached subprocesses.
+
+**How it runs:** `spawnTmuxWorker` in `src/spawner/tmux.ts` (selected through `TmuxBackend` in `src/spawner/backend.ts`):
+1. Resolves a tmux session — reuses the current session when `$TMUX` is set; otherwise creates or reuses a detached `multiclaude` session.
+2. Creates a window named `mc-<taskId>` rooted at the worktree path.
+3. Writes a `worker-launch.sh` script into the worktree's `.claude/` directory and sends it to the pane via `send-keys`.
+4. Spawns a `tmux wait-for` monitor process that unblocks when the pane's command exits.
+
+**How to attach:**
+```bash
+tmux attach              # if multiclaude was started outside tmux
+# or select the window if already inside tmux:
+# Ctrl-b w → pick mc-<taskId>
+```
+Each worker runs in its own `mc-<taskId>` window. You can watch it live, scroll its history, and interact with it normally.
+
+**Supervision model:**
+- **TUI** (`src/tui/index.tsx`): polls `captureTmuxPane` every second and shows the last non-empty line of each running worker's pane below the task row (`↳ <last pane line>`).
+- **Web dashboard** (`src/web/server.ts`, `src/web/public/run.html`): exposes `GET /api/peek/:agentId?lines=<n>` which calls `captureTmuxPane` and returns raw pane content. The run detail page shows a **PANE** tab (alongside LOGS) for tasks that have a tmux pane; it polls `/api/peek` every 2 seconds and renders the output line by line.
+- **Send/steer channel:** `sendToPane(target, text, opts)` types text into a pane and verifies submission by reading back pane content. It handles four Claude Code composer layouts (bordered, ghost-text, busy-footer, bare-prompt) and retries pressing Enter (without retyping the text) if the composer still shows the input after the first keystroke.
+
+**Busy-footer detection** (`src/spawner/stuck-watcher.ts`): before marking a tmux worker as stuck, the watcher calls `captureTmuxPane` and checks the last 6 non-blank lines for `"ESC to interrupt"` or `"working..."`. A pane showing a busy indicator is skipped — the worker is mid-turn, not stuck.
 
 ### MCP transport
 
