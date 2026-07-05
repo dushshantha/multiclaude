@@ -61,6 +61,13 @@
     .log-entry.done-msg { color: #4ade80; }
     .log-panel .empty { color: #555; font-size: 12px; font-style: italic; }
     .expand-hint { color: #555; font-size: 11px; margin-left: 6px; }
+    .panel-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+    .panel-tab { padding: 2px 10px; border-radius: 10px; font-size: 11px; cursor: pointer; border: 1px solid #2a2a4e; color: #888; background: transparent; }
+    .panel-tab.active { background: #1e1e5e; color: #7c83fd; border-color: #7c83fd; }
+    .pane-content { max-height: 240px; overflow-y: auto; background: #0a0a18; border-radius: 4px; padding: 6px 8px; }
+    .pane-line { font-size: 11px; line-height: 1.5; color: #ccc; white-space: pre-wrap; word-break: break-all; }
+    .pane-target { font-size: 11px; color: #555; margin-bottom: 6px; }
+    .pane-target span { color: #7c83fd; }
     .tokens { color: #a78bfa; }
     .cost-val { color: #34d399; }
     .duration { color: #94a3b8; }
@@ -119,10 +126,15 @@
   </table>
   <script>
     const openPanels = new Set()
+    // 'logs' or 'pane' — default tab per task
+    const panelTab = new Map()
     // Map of taskId -> EventSource for live log streams
     const logStreams = new Map()
+    // Map of taskId -> interval for pane polling
+    const panePollers = new Map()
     let latestData = null
     let agentLogPaths = {}
+    let agentTmuxPanes = {}
     let dagEdges = []
     let runBudgetUsd = null
 
@@ -211,13 +223,71 @@
       }
     }
 
+    function getTaskAgentId(taskId) {
+      return latestData?.find(t => t.id === taskId)?.agent_id || null
+    }
+
     function buildLogPanelSkeleton(taskId) {
-      const agentId = latestData?.find(t => t.id === taskId)?.agent_id
+      const agentId = getTaskAgentId(taskId)
       const logPath = agentId ? agentLogPaths[agentId] : null
+      const tmuxPane = agentId ? agentTmuxPanes[agentId] : null
+      const activeTab = panelTab.get(taskId) || (tmuxPane ? 'pane' : 'logs')
+
+      const tabsHtml = tmuxPane
+        ? `<div class="panel-tabs">
+            <button class="panel-tab${activeTab === 'logs' ? ' active' : ''}" onclick="switchTab('${escapeHtml(taskId)}','logs')">LOGS</button>
+            <button class="panel-tab${activeTab === 'pane' ? ' active' : ''}" onclick="switchTab('${escapeHtml(taskId)}','pane')">PANE</button>
+          </div>`
+        : ''
+
+      if (activeTab === 'pane' && tmuxPane) {
+        const targetHtml = `<div class="pane-target">tmux: <span>${escapeHtml(tmuxPane)}</span></div>`
+        return `${tabsHtml}${targetHtml}<div class="pane-content" id="pane-content-${escapeHtml(taskId)}"><div class="empty">Loading pane…</div></div>`
+      }
+
       const pathHtml = logPath
         ? `<div class="log-path">Full output: <span>tail -f ${escapeHtml(logPath)}</span></div>`
         : ''
-      return `${pathHtml}<div class="log-entries"><div class="empty">Loading logs…</div></div>`
+      return `${tabsHtml}${pathHtml}<div class="log-entries"><div class="empty">Loading logs…</div></div>`
+    }
+
+    function startPanePoller(taskId) {
+      if (panePollers.has(taskId)) return
+      const agentId = getTaskAgentId(taskId)
+      if (!agentId) return
+
+      async function fetchPane() {
+        try {
+          const resp = await fetch(`/api/peek/${encodeURIComponent(agentId)}`)
+          if (!resp.ok) return
+          const { content } = await resp.json()
+          const el = document.getElementById(`pane-content-${taskId}`)
+          if (!el) return
+          const wasAtBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 4
+          const lines = (content || '').split('\n')
+          el.innerHTML = lines.map(l => `<div class="pane-line">${escapeHtml(l)}</div>`).join('')
+          if (wasAtBottom) el.scrollTop = el.scrollHeight
+        } catch {}
+      }
+
+      fetchPane()
+      panePollers.set(taskId, setInterval(fetchPane, 2000))
+    }
+
+    function stopPanePoller(taskId) {
+      const id = panePollers.get(taskId)
+      if (id) { clearInterval(id); panePollers.delete(taskId) }
+    }
+
+    function switchTab(taskId, tab) {
+      event.stopPropagation()
+      panelTab.set(taskId, tab)
+      if (tab === 'pane') {
+        stopLogStream(taskId)
+      } else {
+        stopPanePoller(taskId)
+      }
+      if (latestData) renderTasks(latestData)
     }
 
     function renderDag(tasks, edges) {
@@ -401,14 +471,20 @@
 
       tbody.innerHTML = rows
 
-      // Re-attach live streams for any open panels (DOM was rebuilt)
+      // Re-attach live streams/pollers for any open panels (DOM was rebuilt)
       for (const taskId of openPanels) {
-        const stream = logStreams.get(taskId)
-        if (stream) {
-          stream.close()
-          logStreams.delete(taskId)
+        const agentId = getTaskAgentId(taskId)
+        const tmuxPane = agentId ? agentTmuxPanes[agentId] : null
+        const activeTab = panelTab.get(taskId) || (tmuxPane ? 'pane' : 'logs')
+        if (activeTab === 'pane') {
+          stopLogStream(taskId)
+          startPanePoller(taskId)
+        } else {
+          stopPanePoller(taskId)
+          const stream = logStreams.get(taskId)
+          if (stream) { stream.close(); logStreams.delete(taskId) }
+          startLogStream(taskId)
         }
-        startLogStream(taskId)
       }
     }
 
@@ -417,6 +493,7 @@
       if (openPanels.has(taskId)) {
         openPanels.delete(taskId)
         stopLogStream(taskId)
+        stopPanePoller(taskId)
       } else {
         openPanels.add(taskId)
       }
@@ -492,6 +569,7 @@
     es.onmessage = ({ data }) => {
       const snapshot = JSON.parse(data)
       agentLogPaths = snapshot.agentLogPaths || {}
+      agentTmuxPanes = snapshot.agentTmuxPanes || {}
       const runTasks = snapshot.tasks || []
       // Skip task-table re-render if only logs changed (live streams handle that)
       if (JSON.stringify(latestData) !== JSON.stringify(runTasks)) {
