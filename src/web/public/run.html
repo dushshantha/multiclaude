@@ -431,8 +431,8 @@
       try {
         const resp = await fetch(`/api/runs/${runId}`)
         if (!resp.ok) { document.getElementById('run-title').textContent = 'Run not found'; return }
-        const { run } = await resp.json()
-        dagEdges = run.edges || []
+        const { run, edges } = await resp.json()
+        dagEdges = edges || []
         if (latestData) renderDag(document.getElementById('dag-container'), latestData, dagEdges)
         runBudgetUsd = run.budget_usd ?? null
         if (runBudgetUsd != null) {
