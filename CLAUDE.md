@@ -218,8 +218,8 @@ Identify dependencies — which tasks must complete before others can start. The
 plan_dag({
   tasks: [
     { id: "rename-fields", title: "Rename DB columns to camelCase", ticket: "#42", model: "haiku" },
-    { id: "implement-auth", title: "Implement OAuth2 login flow", ticket: "#42", model: "sonnet" },
-    { id: "design-schema", title: "Design multi-tenant data model", ticket: "#45", model: "opus", dependsOn: [] },
+    { id: "implement-auth", title: "Implement OAuth2 login flow", ticket: "#42", model: "sonnet", effort: "high" },
+    { id: "design-schema", title: "Design multi-tenant data model", ticket: "#45", model: "opus", effort: "extra", dependsOn: [] },
     { id: "update-schema-docs", title: "Update docs for new schema", ticket: "#45", model: "haiku", dependsOn: ["design-schema"] }
   ],
   cwd: "/path/to/project",
@@ -313,6 +313,24 @@ If no model is specified, workers default to **sonnet**.
 
 ---
 
+## Effort Selection
+
+When planning tasks, assign the appropriate reasoning effort based on complexity. Use the `effort` field in each task:
+
+| Level | Effort | Use when |
+|-------|--------|----------|
+| low | low | Mechanical tasks: reformatting files, renaming symbols, writing boilerplate, adding type annotations, updating config files, moving files, generating fixtures/mocks |
+| medium | medium | Standard mechanical work that requires some analysis: reviewing code patterns, understanding constraints, making decisions between obvious options |
+| high | high | Standard development: implementing features, writing tests, fixing bugs, refactoring, code review **(DEFAULT)** |
+| extra | extra | Complex work: ambitious features, novel algorithms, performance optimization, tricky refactors where mistakes are costly |
+| max | max | Highest-stakes complexity: architecture decisions, security-critical code, legal/compliance-critical work, tasks where errors are very expensive to undo |
+
+Effort is set independently of `model` — a complex task might use `model: "haiku"` (simple implementation) with `effort: "high"` (complex reasoning), or `model: "opus"` (most capable) with `effort: "low"` (mechanical work).
+
+If no effort is specified, workers default to **high**.
+
+---
+
 ## ⚠️ CRITICAL: Never Do Workers' Jobs Yourself
 
 **You MUST NOT use the built-in `Agent` subagent (previously called `Task`), `Bash`, `Write`, `Edit`, or any other tool to implement tasks.** You are a coordinator, not an implementer.
@@ -342,7 +360,7 @@ The spawner watcher **automatically retries** failed tasks up to `max_retries` t
 | Tool | When to use |
 |---|---|
 | `create_run(title, cwd, external_ref?)` | Before `plan_dag` when handling named tickets/features — creates a run and returns `run_id`. For multiple tickets, create ONE run with a combined title |
-| `plan_dag(epic)` | Once per decomposition — creates the DAG and returns ASCII visualization. Always pass `cwd` and optional `run_id`. Use the `ticket` field in tasks to label which issue each task belongs to (for multi-ticket runs) and `dependsOn` for cross-ticket dependencies |
+| `plan_dag(epic)` | Once per decomposition — creates the DAG and returns ASCII visualization. Always pass `cwd` and optional `run_id`. Use the `ticket` field in tasks to label which issue each task belongs to (for multi-ticket runs), `model` for model tier, `effort` for reasoning effort, and `dependsOn` for cross-ticket dependencies |
 | `AskUserQuestion` | Step 3 plan approval — show visualization and ask Proceed/Revise |
 | `get_system_status(include_done?)` | Instant snapshot — returns only active tasks by default (include_done=true to see all); always includes active_count and done_count |
 | `wait_for_event(timeout_seconds?, include_done?)` | **Monitoring loop** — blocks until something changes, then returns active tasks by default; always includes active_count and done_count |
