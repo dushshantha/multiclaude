@@ -127,6 +127,7 @@ function startSpawnerWatcher(
         taskTitle: task.title,
         taskDescription: task.description ?? undefined,
         model: task.model,
+        effort: task.effort ?? undefined,
         agentId: agent.id,
         worktreePath: agent.cwd,
         mcpConfigPath,

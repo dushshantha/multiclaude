@@ -18,6 +18,7 @@ export interface SpawnConfig {
   taskTitle: string
   taskDescription?: string
   model?: string
+  effort?: string
   agentId: string
   worktreePath: string
   mcpConfigPath: string
@@ -85,6 +86,9 @@ export function buildWorkerArgs(cfg: SpawnConfig): string[] {
   const modelKey = cfg.model ?? 'sonnet'
   const modelId = MODEL_IDS[modelKey] ?? MODEL_IDS.sonnet
 
+  // Only emit --effort when explicitly set to a non-default value ('high' is Claude Code's default)
+  const effortFlags = (cfg.effort && cfg.effort !== 'high') ? ['--effort', cfg.effort] : []
+
   return [
     '--mcp-config', cfg.mcpConfigPath,
     '--allow-dangerously-skip-permissions',
@@ -93,6 +97,7 @@ export function buildWorkerArgs(cfg: SpawnConfig): string[] {
     ...extraFlags,
     '--output-format', outputFormat,
     '--model', modelId,
+    ...effortFlags,
     prompt,
   ]
 }
