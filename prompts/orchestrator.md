@@ -193,6 +193,30 @@ Effort is set independently of `model` — a complex task might use `model: "hai
 
 If no effort is specified, workers default to **high**.
 
+### Auto-picking effort
+
+When a task has no explicit `effort`, infer one from its title and description:
+
+| If the task looks like… | Use |
+|------------------------|-----|
+| Purely mechanical: rename, reformat, move/rename files, regenerate fixtures/mocks, bump versions, update config, add type annotations, copy boilerplate | **low** |
+| Mechanical but needs light reading: doc updates requiring code inspection, wiring a pre-designed change across a few files, simple choices between obvious options | **medium** |
+| Standard development: implement a feature, write tests, fix a bug, refactor, code review — or whenever signals are mixed or unclear | **high** *(default)* |
+| Complex/ambitious: novel algorithms, non-trivial performance optimization, tricky refactors with wide blast radius, cross-cutting changes | **extra** |
+| Highest-stakes: architecture or data-model design, security-critical or auth/crypto code, concurrency/locking, migrations, anything where mistakes are very expensive to undo | **max** |
+
+**Rule:** an explicit `effort` on a task always overrides this heuristic — the table above only applies when `effort` is absent.
+
+Effort and model are independent — infer them separately. A few examples:
+
+| Task description | effort | model | Why |
+|-----------------|--------|-------|-----|
+| "Rename `user_id` → `userId` in all DB columns" | low | haiku | Pure mechanical rename |
+| "Update README to document the new `effort` field" | medium | haiku | Doc update that requires reading code |
+| "Implement rate limiting on /api/chat" | high | sonnet | Standard feature work **(default)** |
+| "Refactor auth to support multi-tenant token scopes" | extra | sonnet | Wide blast radius, non-trivial design |
+| "Design migration strategy for splitting the users table" | max | opus | Architecture decision, hard to undo |
+
 ---
 
 ## ⚠️ CRITICAL: Never Do Workers' Jobs Yourself
