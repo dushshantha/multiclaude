@@ -68,6 +68,21 @@ describe('orchestrator tools', () => {
     expect(tasks.find(t => t.id === 'c')?.model).toBe('opus')
   })
 
+  it('plan_dag stores effort field on tasks (defaults to high)', () => {
+    const epic = {
+      tasks: [
+        { id: 'a', title: 'Low effort task', effort: 'low', dependsOn: [] },
+        { id: 'b', title: 'Default effort task', dependsOn: [] },
+        { id: 'c', title: 'Max effort task', effort: 'max', dependsOn: [] },
+      ]
+    }
+    handlePlanDag(db, epic)
+    const tasks = db.prepare('SELECT id, effort FROM tasks ORDER BY id').all() as { id: string; effort: string }[]
+    expect(tasks.find(t => t.id === 'a')?.effort).toBe('low')
+    expect(tasks.find(t => t.id === 'b')?.effort).toBe('high')
+    expect(tasks.find(t => t.id === 'c')?.effort).toBe('max')
+  })
+
   it('get_system_status returns tasks, agents, readyTasks, and retriableTasks', () => {
     const status = handleGetSystemStatus(db)
     expect(status).toHaveProperty('tasks')
