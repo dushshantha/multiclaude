@@ -106,6 +106,7 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
               title: z.string(),
               description: z.string().optional(),
               model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Model to use for this task (default: sonnet)'),
+              effort: z.enum(['low', 'medium', 'high', 'extra', 'max']).optional().describe('Reasoning effort level (default: high). Use lower for mechanical tasks, higher for complex/high-stakes tasks.'),
               ticket: z.string().optional().describe('Ticket/issue identifier to group tasks in the web UI (e.g. "PROJ-123")'),
               dependsOn: z.array(z.string()),
             }))

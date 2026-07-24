@@ -13,6 +13,7 @@ export interface EpicTask {
   title: string
   description?: string
   model?: string
+  effort?: string
   ticket?: string
   dependsOn: string[]
 }
@@ -41,7 +42,7 @@ export function handlePlanDag(
     run_id = run.id
   }
   for (const t of epic.tasks) {
-    createTask(db, { id: t.id, title: t.title, description: t.description, model: t.model, run_id, ticket: t.ticket })
+    createTask(db, { id: t.id, title: t.title, description: t.description, model: t.model, effort: t.effort, run_id, ticket: t.ticket })
   }
   for (const t of epic.tasks) {
     for (const dep of t.dependsOn) {

@@ -137,4 +137,71 @@ describe('spawner', () => {
     if (orig === undefined) delete process.env['CLAUDECODE']
     else process.env['CLAUDECODE'] = orig
   })
+
+  it('buildWorkerArgs omits --effort when effort is unset (high is the default)', () => {
+    const cfg: SpawnConfig = {
+      taskId: 'task-1',
+      taskTitle: 'Build auth',
+      agentId: 'w-task-1',
+      worktreePath: '/tmp/mc-task-1',
+      mcpConfigPath: '/tmp/mc-worker-config.json',
+    }
+    const args = buildWorkerArgs(cfg)
+    expect(args).not.toContain('--effort')
+  })
+
+  it('buildWorkerArgs omits --effort when effort is explicitly high (backwards-compatible default)', () => {
+    const cfg: SpawnConfig = {
+      taskId: 'task-1',
+      taskTitle: 'Build auth',
+      effort: 'high',
+      agentId: 'w-task-1',
+      worktreePath: '/tmp/mc-task-1',
+      mcpConfigPath: '/tmp/mc-worker-config.json',
+    }
+    const args = buildWorkerArgs(cfg)
+    expect(args).not.toContain('--effort')
+  })
+
+  it('buildWorkerArgs passes --effort low for low effort', () => {
+    const cfg: SpawnConfig = {
+      taskId: 'task-1',
+      taskTitle: 'Build auth',
+      effort: 'low',
+      agentId: 'w-task-1',
+      worktreePath: '/tmp/mc-task-1',
+      mcpConfigPath: '/tmp/mc-worker-config.json',
+    }
+    const args = buildWorkerArgs(cfg)
+    expect(args).toContain('--effort')
+    expect(args[args.indexOf('--effort') + 1]).toBe('low')
+  })
+
+  it('buildWorkerArgs passes --effort max for max effort', () => {
+    const cfg: SpawnConfig = {
+      taskId: 'task-1',
+      taskTitle: 'Build auth',
+      effort: 'max',
+      agentId: 'w-task-1',
+      worktreePath: '/tmp/mc-task-1',
+      mcpConfigPath: '/tmp/mc-worker-config.json',
+    }
+    const args = buildWorkerArgs(cfg)
+    expect(args).toContain('--effort')
+    expect(args[args.indexOf('--effort') + 1]).toBe('max')
+  })
+
+  it('buildWorkerArgs passes --effort xhigh for xhigh effort', () => {
+    const cfg: SpawnConfig = {
+      taskId: 'task-1',
+      taskTitle: 'Build auth',
+      effort: 'xhigh',
+      agentId: 'w-task-1',
+      worktreePath: '/tmp/mc-task-1',
+      mcpConfigPath: '/tmp/mc-worker-config.json',
+    }
+    const args = buildWorkerArgs(cfg)
+    expect(args).toContain('--effort')
+    expect(args[args.indexOf('--effort') + 1]).toBe('xhigh')
+  })
 })
