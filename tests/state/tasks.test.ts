@@ -41,4 +41,14 @@ describe('tasks', () => {
   it('returns null for missing task', () => {
     expect(getTask(db, 'nonexistent')).toBeNull()
   })
+
+  it('persists a provided effort value', () => {
+    createTask(db, { id: 'task-1', title: 'Build auth', effort: 'low' })
+    expect(getTask(db, 'task-1')?.effort).toBe('low')
+  })
+
+  it('defaults effort to high when omitted', () => {
+    createTask(db, { id: 'task-1', title: 'Build auth' })
+    expect(getTask(db, 'task-1')?.effort).toBe('high')
+  })
 })
