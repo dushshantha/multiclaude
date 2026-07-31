@@ -47,16 +47,32 @@ export function ensureTmuxSession(): string {
 }
 
 /**
- * Creates a tmux window named mc-<taskId> in the given session,
- * rooted at worktreePath. Returns the window target (session:window).
+ * Creates a tmux window with the given name in the given session, rooted at
+ * worktreePath. Returns the tmux window ID (@NN form), which is globally
+ * unique and stable for the lifetime of the window — use it for all
+ * subsequent targeting instead of the name-based session:name form.
  */
-export function createTmuxWindow(sessionName: string, taskId: string, worktreePath: string): string {
-  const windowName = `mc-${taskId}`
-  execSync(
-    `tmux new-window -d -t ${shellQuote(sessionName)}: -n ${shellQuote(windowName)} -c ${shellQuote(worktreePath)}`,
-    { stdio: 'pipe' }
-  )
-  return `${sessionName}:${windowName}`
+export function createTmuxWindow(sessionName: string, windowName: string, worktreePath: string): string {
+  const windowId = execSync(
+    `tmux new-window -d -P -F '#{window_id}' -t ${shellQuote(sessionName)}: -n ${shellQuote(windowName)} -c ${shellQuote(worktreePath)}`,
+    { encoding: 'utf8', stdio: 'pipe' }
+  ).trim()
+  if (!windowId) {
+    throw new Error(`Failed to get window ID for newly created tmux window '${windowName}'`)
+  }
+  return windowId
+}
+
+/**
+ * Kills a tmux window by its window ID (@NN). Silently ignores errors (window
+ * may already be dead).
+ */
+export function killTmuxWindow(windowId: string): void {
+  try {
+    execSync(`tmux kill-window -t ${shellQuote(windowId)}`, { stdio: 'pipe' })
+  } catch {
+    // Window already dead or tmux unavailable — fine
+  }
 }
 
 /**
@@ -268,14 +284,18 @@ export function spawnTmuxWorker(cfg: SpawnConfig): WorkerHandle {
   )
 
   const sessionName = ensureTmuxSession()
-  const windowTarget = createTmuxWindow(sessionName, cfg.taskId, cfg.worktreePath)
-  const panePid = getTmuxPanePid(windowTarget)
+  // Window name is unique per agent attempt — different agent IDs for retries
+  // prevent tmux from resolving -t to a stale dead window from a prior attempt.
+  const windowName = `mc-${cfg.agentId}`
+  const windowId = createTmuxWindow(sessionName, windowName, cfg.worktreePath)
+  // All targeting after this point uses the @NN window ID, not the name.
+  const panePid = getTmuxPanePid(windowId)
 
   const scriptPath = writeLaunchScript(cfg)
-  const waitSignal = `mc-${cfg.taskId}-exit`
+  const waitSignal = `mc-${cfg.agentId}-exit`
 
   // Run the script; signal when done so the monitor below detects exit
-  sendTmuxKeys(windowTarget, `bash ${shellQuote(scriptPath)}; tmux wait-for -S ${shellQuote(waitSignal)}`)
+  sendTmuxKeys(windowId, `bash ${shellQuote(scriptPath)}; tmux wait-for -S ${shellQuote(waitSignal)}`)
 
   // Monitor blocks until the signal fires (claude exits in the pane)
   const monitor = spawn('tmux', ['wait-for', waitSignal], {
@@ -285,7 +305,7 @@ export function spawnTmuxWorker(cfg: SpawnConfig): WorkerHandle {
 
   return {
     pid: panePid,
-    tmuxPane: windowTarget,
+    tmuxPane: windowId,
     onExit(cb) { monitor.on('exit', cb) },
     onError(cb) { monitor.on('error', cb) },
   }

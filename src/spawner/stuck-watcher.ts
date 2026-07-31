@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import { getTask, updateTask } from '../server/state/tasks.js'
 import { updateAgent } from '../server/state/agents.js'
-import { captureTmuxPane } from './tmux.js'
+import { captureTmuxPane, killTmuxWindow } from './tmux.js'
 
 interface RunningAgentRow {
   id: string
@@ -48,6 +48,7 @@ export function checkStuckWorkers(
   stuckTimeoutMinutes: number,
   now: number = Date.now(),
   capturePane: (target: string, lines: number) => string = captureTmuxPane,
+  killWindow: (windowId: string) => void = killTmuxWindow,
 ): void {
   const runningAgents = db.prepare(
     "SELECT id, task_id, status, tmux_pane FROM agents WHERE status = 'running'"
@@ -88,6 +89,8 @@ export function checkStuckWorkers(
       db.prepare(
         'INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)'
       ).run(task.id, 'error', `timed out after ${stuckTimeoutMinutes}m with no log activity`)
+      // Reap the tmux window so it doesn't accumulate as a dead pane
+      if (agent.tmux_pane) killWindow(agent.tmux_pane)
       stuckSince.delete(task.id)
     } else if (idleMinutes >= stuckWarningMinutes) {
       if (!stuckSince.has(task.id)) {
