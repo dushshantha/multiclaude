@@ -82,14 +82,14 @@ describe('isMergedInto', () => {
       writeFileSync(join(info.path, 'c.ts'), 'export const c = 3')
       execSync('git add . && git commit -m "add c"', { cwd: info.path })
 
-      // Push task branch to origin BEFORE removing local
+      // Push task branch to origin BEFORE cleanup
       execSync(`git push origin ${info.branch}`, { cwd: repoPath })
 
       // Merge into integration branch
       await mergeWorktreeBranch(repoPath, info.branch, runId)
 
-      // Delete the local task branch — this simulates post-merge cleanup having run
-      execSync(`git branch -D ${info.branch}`, { cwd: repoPath })
+      // Run actual post-merge cleanup: removes worktree + deletes local branch
+      await removeWorktree(repoPath, info)
 
       // isMergedInto must still return true via origin/<branch>
       const result = await isMergedInto(repoPath, info.branch, `mc/run-${runId}`)
