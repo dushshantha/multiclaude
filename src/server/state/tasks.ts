@@ -27,6 +27,7 @@ export interface Task {
   failure_reason: string | null
   failure_detail: string | null
   recovery_attempts: number
+  merged_into_run: boolean | null
   created_at: string
   updated_at: string
 }
@@ -59,6 +60,14 @@ export interface UpdateTaskInput {
   failure_reason?: string
   failure_detail?: string
   recovery_attempts?: number
+  merged_into_run?: boolean
+}
+
+function mapTask(row: Record<string, unknown>): Task {
+  return {
+    ...(row as any),
+    merged_into_run: row.merged_into_run == null ? null : Boolean(row.merged_into_run),
+  }
 }
 
 export function createTask(db: Database.Database, input: CreateTaskInput): void {
@@ -78,7 +87,8 @@ export function createTask(db: Database.Database, input: CreateTaskInput): void 
 }
 
 export function getTask(db: Database.Database, id: string): Task | null {
-  return (db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Task | undefined) ?? null
+  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined
+  return row ? mapTask(row) : null
 }
 
 export function updateTask(db: Database.Database, id: string, input: UpdateTaskInput): void {
@@ -101,13 +111,14 @@ export function updateTask(db: Database.Database, id: string, input: UpdateTaskI
   if (input.failure_reason !== undefined) { sets.push('failure_reason = @failure_reason'); params.failure_reason = input.failure_reason }
   if (input.failure_detail !== undefined) { sets.push('failure_detail = @failure_detail'); params.failure_detail = input.failure_detail }
   if (input.recovery_attempts !== undefined) { sets.push('recovery_attempts = @recovery_attempts'); params.recovery_attempts = input.recovery_attempts }
+  if (input.merged_into_run !== undefined) { sets.push('merged_into_run = @merged_into_run'); params.merged_into_run = input.merged_into_run ? 1 : 0 }
 
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = @id`).run(params as any)
 }
 
 export function listTasks(db: Database.Database, status?: TaskStatus): Task[] {
   if (status) {
-    return db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY created_at').all(status) as Task[]
+    return (db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY created_at').all(status) as Record<string, unknown>[]).map(mapTask)
   }
-  return db.prepare('SELECT * FROM tasks ORDER BY created_at').all() as Task[]
+  return (db.prepare('SELECT * FROM tasks ORDER BY created_at').all() as Record<string, unknown>[]).map(mapTask)
 }

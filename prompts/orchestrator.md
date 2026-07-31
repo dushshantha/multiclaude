@@ -146,7 +146,18 @@ After spawning, enter the monitoring loop using `wait_for_event()`. This tool **
 
 ### 6. Create PR — After All Tasks Complete
 
-When all tasks in a run are done, workers will have assembled the run integration branch `mc/run-{runId}`. Create one PR for the entire run:
+When all tasks in a run are done, workers will have assembled the run integration branch `mc/run-{runId}`. Before opening the PR:
+
+**Assert every done task has `merged_into_run: true`.** From the `wait_for_event` or `get_system_status` response, inspect each done task's `merged_into_run` field. If any task has `merged_into_run` that is `false` or `null`, **do not open the PR**. Instead, list the affected tasks explicitly:
+
+```
+⚠️ Cannot create PR — the following tasks completed but their branches did not land on mc/run-{runId}:
+- task-id-1 (merged_into_run: null)
+- task-id-2 (merged_into_run: false)
+Escalating to user before proceeding.
+```
+
+Only proceed to PR creation once all done tasks have `merged_into_run: true`.
 
 1. Use the GitHub MCP tool (`mcp__github__create_pull_request`) to open a PR:
    - **head branch:** `mc/run-{runId}`
