@@ -80,7 +80,7 @@ export async function handleReportDone(
       try {
         const runId = task.run_id ?? undefined
         await ensureIntegrationBranch(projectCwd, runId)
-        await mergeWorktreeBranch(projectCwd, task.branch, runId)
+        await mergeWorktreeBranch(projectCwd, task.branch, runId, task.worktree_path)
         const integBranch = runId ? `mc/run-${runId}` : 'mc/integration'
         db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
           taskId, 'info', `Merged and pushed ${task.branch} to origin/${integBranch}`
