@@ -218,10 +218,51 @@ async function allocateSuffixedBranch(
   throw new Error(`Could not allocate suffixed branch name for ${branch} after 100 attempts`)
 }
 
+/**
+ * Removes any stray `core.worktree` from the parent repository's shared git
+ * config. Workers receive GIT_DIR/GIT_WORK_TREE env vars for isolation, but
+ * if anything writes `core.worktree` to the shared .git/config, the parent
+ * repo breaks when the temp worktree directory is deleted.
+ */
+export async function sanitizeParentGitConfig(repoPath: string): Promise<void> {
+  const git = simpleGit(repoPath)
+  try {
+    const value = (await git.raw(['config', '--local', '--get', 'core.worktree'])).trim()
+    if (value) {
+      await git.raw(['config', '--local', '--unset', 'core.worktree'])
+    }
+  } catch {
+    // exit code 1 = key not found — the expected state
+  }
+}
+
+/**
+ * Asserts that the parent repository's shared git config does not contain
+ * `core.worktree`. Throws if it does — this key should never be in the
+ * shared config when using the worktree isolation model.
+ */
+export async function assertSharedConfigClean(repoPath: string): Promise<void> {
+  const git = simpleGit(repoPath)
+  let value: string | undefined
+  try {
+    value = (await git.raw(['config', '--local', '--get', 'core.worktree'])).trim()
+  } catch {
+    return
+  }
+  if (value) {
+    throw new Error(
+      `Shared git config at ${repoPath} contains core.worktree=${value}. ` +
+      `This corrupts the repository when the worktree is deleted. ` +
+      `Use environment variables (GIT_DIR, GIT_WORK_TREE) for isolation instead.`
+    )
+  }
+}
+
 export async function removeWorktree(repoPath: string, info: Pick<WorktreeInfo, 'path' | 'branch'>): Promise<void> {
   const git = simpleGit(repoPath)
   // Silently ignore errors when the worktree is already gone (idempotent)
   await git.raw(['worktree', 'remove', '--force', info.path]).catch(() => {})
   await git.raw(['branch', '-D', info.branch]).catch(() => {})
   await rm(info.path, { recursive: true, force: true }).catch(() => {})
+  await sanitizeParentGitConfig(repoPath).catch(() => {})
 }
