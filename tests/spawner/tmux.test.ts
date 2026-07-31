@@ -110,7 +110,7 @@ describe('createTmuxWindow', () => {
 
   it('throws when tmux returns an empty window ID', () => {
     mockExecSync.mockReturnValueOnce('\n')
-    expect(() => createTmuxWindow('sess', 'mc-w-task', '/path')).toThrow(/Failed to get window ID/)
+    expect(() => createTmuxWindow('sess', 'mc-w-task', '/path')).toThrow(/tmux_window_create_failed/)
   })
 })
 

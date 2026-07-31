@@ -2,7 +2,7 @@
 import { startCoordServer } from './server/index.js'
 import { startWebServer } from './web/server.js'
 import { startTui } from './tui/index.js'
-import { writeWorkerMcpConfig, workerLogPath } from './spawner/index.js'
+import { writeWorkerMcpConfig, workerLogPath, classifyLaunchError } from './spawner/index.js'
 import { createBackend } from './spawner/backend.js'
 import type { RuntimeBackend } from './spawner/backend.js'
 import { openWorkerTerminal } from './spawner/terminal.js'
@@ -85,12 +85,15 @@ function startSpawnerWatcher(
       if (retried.has(retryKey)) continue
       retried.add(retryKey)
 
-      // Find cwd from the most recent agent for this task
+      // Find cwd from the most recent agent for this task, or fall back to repo_path
+      // (repo_path is saved early in handleSpawnWorker before worktree creation, so it
+      // exists even when the agent was never registered due to a worktree creation failure).
       const prevAgent = db.prepare(
         "SELECT * FROM agents WHERE task_id = ? ORDER BY created_at DESC LIMIT 1"
       ).get(task.id) as AgentRow | undefined
 
-      if (!prevAgent?.cwd) {
+      const retryCwd = prevAgent?.cwd ?? task.repo_path ?? null
+      if (!retryCwd) {
         console.warn(`[spawner] Cannot retry task ${task.id}: no cwd found for previous agent`)
         continue
       }
@@ -114,11 +117,13 @@ function startSpawnerWatcher(
       )
 
       // Register new agent and transition task to in_progress
-      void handleSpawnWorker(db, task.id, newAgentId, { cwd: prevAgent.cwd }).then(result => {
+      void handleSpawnWorker(db, task.id, newAgentId, { cwd: retryCwd }).then(result => {
         if (!result.ok) {
           console.error(`[spawner] Failed to register retry worker for task ${task.id}: ${result.error}`)
-          // Revert so we can retry again on the next tick
-          updateTask(db, task.id, { retry_count: task.retry_count, status: 'failed' })
+          // Keep retry_count at retryAttempt (already written) so the next retry key
+          // advances. Reverting to task.retry_count caused infinite loops because the
+          // retried set was cleared while retry_count stayed at 0.
+          updateTask(db, task.id, { status: 'failed' })
           retried.delete(retryKey)
         }
       })
@@ -161,7 +166,17 @@ function startSpawnerWatcher(
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
         console.error(`[spawner] Failed to launch worker ${agent.id}: ${msg}`)
-        updateAgent(db, agent.id, { status: 'failed' })
+        const failureReason = classifyLaunchError(msg)
+        updateAgent(db, agent.id, { status: 'failed', failure_reason: failureReason, failure_detail: msg })
+        if (agent.task_id) {
+          const t = getTask(db, agent.task_id)
+          if (t && t.status !== 'done') {
+            updateTask(db, agent.task_id, { status: 'failed', failure_reason: failureReason, failure_detail: msg })
+          }
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            agent.task_id, 'error', `${failureReason}: ${msg}`
+          )
+        }
         continue
       }
 
@@ -232,13 +247,18 @@ function startSpawnerWatcher(
       }
 
       handle.onError((err) => {
-        console.error(`[spawner] Failed to launch worker ${agent.id}: ${err.message}`)
-        updateAgent(db, agent.id, { status: 'failed' })
+        const msg = err.message
+        console.error(`[spawner] Failed to launch worker ${agent.id}: ${msg}`)
+        const failureReason = classifyLaunchError(msg)
+        updateAgent(db, agent.id, { status: 'failed', failure_reason: failureReason, failure_detail: msg })
         if (agent.task_id) {
           const t = getTask(db, agent.task_id)
           if (t && t.status !== 'done') {
-            updateTask(db, agent.task_id, { status: 'failed' })
+            updateTask(db, agent.task_id, { status: 'failed', failure_reason: failureReason, failure_detail: msg })
           }
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            agent.task_id, 'error', `${failureReason}: ${msg}`
+          )
         }
       })
 

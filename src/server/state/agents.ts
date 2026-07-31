@@ -9,6 +9,8 @@ export interface Agent {
   status: AgentStatus
   cwd: string | null
   tmux_pane: string | null
+  failure_reason: string | null
+  failure_detail: string | null
   created_at: string
 }
 
@@ -25,13 +27,15 @@ export function getAgent(db: Database.Database, id: string): Agent | null {
   return (db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as Agent | undefined) ?? null
 }
 
-export function updateAgent(db: Database.Database, id: string, input: { status?: AgentStatus; pid?: number; cwd?: string; tmux_pane?: string }): void {
+export function updateAgent(db: Database.Database, id: string, input: { status?: AgentStatus; pid?: number; cwd?: string; tmux_pane?: string; failure_reason?: string; failure_detail?: string }): void {
   const sets: string[] = []
   const params: Record<string, unknown> = { id }
   if (input.status !== undefined) { sets.push('status = @status'); params.status = input.status }
   if (input.pid !== undefined) { sets.push('pid = @pid'); params.pid = input.pid }
   if (input.cwd !== undefined) { sets.push('cwd = @cwd'); params.cwd = input.cwd }
   if (input.tmux_pane !== undefined) { sets.push('tmux_pane = @tmux_pane'); params.tmux_pane = input.tmux_pane }
+  if (input.failure_reason !== undefined) { sets.push('failure_reason = @failure_reason'); params.failure_reason = input.failure_reason }
+  if (input.failure_detail !== undefined) { sets.push('failure_detail = @failure_detail'); params.failure_detail = input.failure_detail }
   if (sets.length === 0) return
   db.prepare(`UPDATE agents SET ${sets.join(', ')} WHERE id = @id`).run(params)
 }
