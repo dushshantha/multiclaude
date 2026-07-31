@@ -92,6 +92,29 @@ export function getTmuxPanePid(target: string): number | undefined {
 }
 
 /**
+ * Returns the PID of the first child process of parentPid, or undefined if
+ * the parent has no children or pgrep is unavailable.
+ *
+ * Used after tmux worker launch to detect whether the agent process (claude /
+ * its Node.js wrapper) actually started inside the pane. The pane's own shell
+ * PID is parentPid; any child it has is the running agent process.
+ */
+export function getChildProcessPid(parentPid: number): number | undefined {
+  try {
+    const raw = execSync(
+      `pgrep -P ${parentPid}`,
+      { encoding: 'utf8', stdio: 'pipe', timeout: 2000 }
+    ).trim()
+    const pids = raw.split('\n')
+      .map(s => parseInt(s.trim(), 10))
+      .filter(n => Number.isFinite(n) && n > 0)
+    return pids[0]
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Sends a line of text to a tmux pane as keystrokes, followed by Enter.
  */
 export function sendTmuxKeys(target: string, command: string): void {

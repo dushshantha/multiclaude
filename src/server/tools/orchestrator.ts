@@ -2,6 +2,7 @@ import path from 'path'
 import { simpleGit } from 'simple-git'
 import type Database from 'better-sqlite3'
 import { createTask, listTasks, getTask, updateTask } from '../state/tasks.js'
+import type { Task } from '../state/tasks.js'
 import { addEdge, getReadyTasks, getBlockers } from '../state/dag.js'
 import { getAgent, listAgents, registerAgent, updateAgent } from '../state/agents.js'
 import { upsertProject, listProjects } from '../state/projects.js'
@@ -123,12 +124,32 @@ function buildDagVisualization(epic: Epic): string {
   return lines.join('\n').trimEnd()
 }
 
+/** Task augmented with last_log_at so callers can distinguish working from merely registered. */
+export type TaskWithActivity = Task & {
+  /** ISO timestamp of the most recent log entry for this task, or null if no logs yet. */
+  last_log_at: string | null
+}
+
 export interface SystemStatus {
-  tasks: ReturnType<typeof listTasks>
+  tasks: TaskWithActivity[]
   agents: ReturnType<typeof listAgents>
   readyTasks: ReturnType<typeof getReadyTasks>
-  retriableTasks: ReturnType<typeof listTasks>
+  retriableTasks: TaskWithActivity[]
   runs: ReturnType<typeof listRunsWithStats>
+}
+
+/**
+ * Enriches tasks with last_log_at from the logs table.
+ * A null last_log_at means the agent has produced no log entries yet — it is
+ * "merely registered" (spawning) rather than actively working.
+ */
+export function enrichWithLastLog(db: Database.Database, tasks: ReturnType<typeof listTasks>): TaskWithActivity[] {
+  return tasks.map(task => {
+    const row = db.prepare(
+      'SELECT MAX(created_at) AS last_log FROM logs WHERE task_id = ?'
+    ).get(task.id) as { last_log: string | null }
+    return { ...task, last_log_at: row.last_log }
+  })
 }
 
 export function handleGetSystemStatus(db: Database.Database, includeDone = false): SystemStatus {
@@ -136,10 +157,10 @@ export function handleGetSystemStatus(db: Database.Database, includeDone = false
   const tasks = includeDone ? allTasks : allTasks.filter(t => t.status !== 'done' && t.status !== 'failed' && t.status !== 'cancelled')
   const retriableTasks = allTasks.filter(t => t.status === 'failed' && t.retry_count < t.max_retries)
   return {
-    tasks,
+    tasks: enrichWithLastLog(db, tasks),
     agents: listAgents(db),
     readyTasks: getReadyTasks(db),
-    retriableTasks,
+    retriableTasks: enrichWithLastLog(db, retriableTasks),
     runs: listRunsWithStats(db),
   }
 }
