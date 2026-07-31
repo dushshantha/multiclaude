@@ -2,7 +2,7 @@ import express from 'express'
 import { createServer } from 'http'
 import { randomUUID } from 'crypto'
 import { createDb } from './state/db.js'
-import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker, handleCompleteTask, handleCreateRun, handleListProjects, handleListRuns } from './tools/orchestrator.js'
+import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker, handleCompleteTask, handleCreateRun, handleListProjects, handleListRuns, handleRecoverTask } from './tools/orchestrator.js'
 import { backfillProjectsFromAgents } from './state/projects.js'
 import { handleGetMyTask, handleReportProgress, handleReportDone, handleReportBlocked } from './tools/worker.js'
 import type Database from 'better-sqlite3'
@@ -178,6 +178,16 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
     async ({ task_id, summary }) => {
       handleCompleteTask(db, task_id, summary)
       return { content: [{ type: 'text' as const, text: `Task ${task_id} marked as done` }] }
+    }
+  )
+
+  server.tool(
+    'recover_task',
+    'Attempt to recover a failed task by cleaning up stale git state, reaping tmux windows, clearing the agent record, and resetting the task to a spawnable state. Returns a structured report with verdict: recovered (safe to re-spawn), unrecoverable (with reason), or needs_human (with the specific action required).',
+    { task_id: z.string() },
+    async ({ task_id }) => {
+      const result = await handleRecoverTask(db, task_id)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
     }
   )
 

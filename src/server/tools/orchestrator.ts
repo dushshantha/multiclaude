@@ -7,8 +7,8 @@ import { addEdge, getReadyTasks, getBlockers } from '../state/dag.js'
 import { getAgent, listAgents, registerAgent, updateAgent } from '../state/agents.js'
 import { upsertProject, listProjects } from '../state/projects.js'
 import { createRun, getRun, listRunsWithStats, RunWithStats } from '../state/runs.js'
-import { createWorktree } from '../../git/worktree.js'
-import { killTmuxWindow } from '../../spawner/tmux.js'
+import { createWorktree, preflightReconcile, isProtectedBranch } from '../../git/worktree.js'
+import { killTmuxWindow, reapStaleWindows, ensureTmuxSession } from '../../spawner/tmux.js'
 
 export const VALID_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type EffortValue = typeof VALID_EFFORT_VALUES[number]
@@ -307,4 +307,173 @@ export function classifyWorktreeError(msg: string): string {
   if (/already exists/i.test(msg) && /branch/i.test(msg)) return 'worktree_branch_exists'
   if (/already registered|checked out at/i.test(msg)) return 'worktree_path_registered'
   return 'worktree_create_failed'
+}
+
+export interface RecoverAction {
+  action: string
+  success: boolean
+  detail: string
+}
+
+export type RecoverVerdict = 'recovered' | 'unrecoverable' | 'needs_human'
+
+export interface RecoverResult {
+  task_id: string
+  verdict: RecoverVerdict
+  reason?: string
+  actions: RecoverAction[]
+}
+
+export async function handleRecoverTask(
+  db: Database.Database,
+  taskId: string,
+): Promise<RecoverResult> {
+  const task = getTask(db, taskId)
+  if (!task) {
+    return { task_id: taskId, verdict: 'unrecoverable', reason: 'Task not found', actions: [] }
+  }
+
+  if (task.status === 'done' || task.status === 'cancelled') {
+    return {
+      task_id: taskId,
+      verdict: 'unrecoverable',
+      reason: `Task is already ${task.status}`,
+      actions: [],
+    }
+  }
+
+  if (task.status === 'in_progress') {
+    return {
+      task_id: taskId,
+      verdict: 'needs_human',
+      reason: 'Task is in_progress — cancel it first if recovery is needed',
+      actions: [],
+    }
+  }
+
+  if (task.status === 'pending' && !task.failure_reason && !task.agent_id) {
+    return {
+      task_id: taskId,
+      verdict: 'recovered',
+      reason: 'Task is already in a spawnable state',
+      actions: [],
+    }
+  }
+
+  const actions: RecoverAction[] = []
+  const failureReason = task.failure_reason
+
+  // --- Phase 1: Targeted environment repairs based on failure_reason ---
+
+  if (failureReason?.startsWith('worktree_')) {
+    if (task.repo_path) {
+      const branch = task.branch ?? `mc/${taskId}`
+
+      if (isProtectedBranch(branch)) {
+        return {
+          task_id: taskId,
+          verdict: 'needs_human',
+          reason: `Branch ${branch} is protected — cannot reconcile without risking data loss`,
+          actions,
+        }
+      }
+
+      try {
+        const git = simpleGit(task.repo_path)
+
+        let baseBranch: string | undefined
+        if (task.run_id) {
+          const runBranch = `mc/run-${task.run_id}`
+          const branches = await git.branchLocal()
+          if (branches.all.includes(runBranch)) {
+            baseBranch = runBranch
+          }
+        }
+
+        const reconcile = await preflightReconcile(git, branch, baseBranch)
+        for (const ra of reconcile.actions) {
+          actions.push({ action: `git_reconcile:${ra.type}`, success: true, detail: ra.detail })
+        }
+        if (reconcile.actions.length === 0) {
+          actions.push({ action: 'git_reconcile:noop', success: true, detail: `No git state to clean up for branch ${branch}` })
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg.includes('Refusing to reconcile')) {
+          return { task_id: taskId, verdict: 'needs_human', reason: msg, actions }
+        }
+        actions.push({ action: 'git_reconcile', success: false, detail: `Git reconciliation failed: ${msg}` })
+        return {
+          task_id: taskId,
+          verdict: 'unrecoverable',
+          reason: 'Git reconciliation failed — manual cleanup required',
+          actions,
+        }
+      }
+    } else {
+      actions.push({ action: 'git_reconcile:skip', success: true, detail: 'No repo_path on task — skipping git reconciliation' })
+    }
+  }
+
+  if (failureReason === 'tmux_window_create_failed') {
+    try {
+      const sessionName = ensureTmuxSession()
+      reapStaleWindows(sessionName, taskId)
+      actions.push({ action: 'tmux_reap_stale_windows', success: true, detail: `Reaped stale tmux windows for task ${taskId}` })
+    } catch {
+      actions.push({ action: 'tmux_reap_stale_windows', success: false, detail: 'Tmux unavailable — window reaping skipped (next spawn will retry)' })
+    }
+  }
+
+  if (failureReason === 'tmux_session_create_failed') {
+    actions.push({ action: 'diagnose', success: true, detail: 'Tmux session creation failed — ensure tmux is installed and accessible' })
+  }
+
+  if (failureReason === 'settings_write_failed') {
+    actions.push({ action: 'diagnose', success: true, detail: 'Settings file write failed — check filesystem permissions on the worktree directory' })
+  }
+
+  // --- Phase 2: Clear stale agent record ---
+
+  if (task.agent_id) {
+    const agent = getAgent(db, task.agent_id)
+    if (agent) {
+      if (agent.tmux_pane) {
+        killTmuxWindow(agent.tmux_pane)
+        actions.push({ action: 'kill_agent_tmux_window', success: true, detail: `Killed tmux window ${agent.tmux_pane} for agent ${task.agent_id}` })
+      }
+      if (agent.status !== 'done' && agent.status !== 'failed') {
+        updateAgent(db, task.agent_id, { status: 'failed' })
+        actions.push({ action: 'mark_agent_failed', success: true, detail: `Marked agent ${task.agent_id} as failed` })
+      }
+    }
+  }
+
+  // --- Phase 3: Reset task to spawnable state ---
+
+  db.prepare(`
+    UPDATE tasks SET
+      status = 'pending',
+      agent_id = NULL,
+      failure_reason = NULL,
+      failure_detail = NULL,
+      worktree_path = NULL,
+      branch = NULL,
+      head_sha = NULL,
+      started_at = NULL,
+      updated_at = datetime('now')
+    WHERE id = ?
+  `).run(taskId)
+  actions.push({ action: 'reset_task', success: true, detail: `Reset task ${taskId} to pending state` })
+
+  // --- Phase 4: Verdict ---
+
+  if (failureReason === 'tmux_session_create_failed' || failureReason === 'settings_write_failed') {
+    const envMsg = failureReason === 'tmux_session_create_failed'
+      ? 'Task reset to pending, but tmux session creation previously failed — ensure tmux is available before re-spawning'
+      : 'Task reset to pending, but settings file write previously failed — check filesystem permissions before re-spawning'
+    return { task_id: taskId, verdict: 'needs_human', reason: envMsg, actions }
+  }
+
+  return { task_id: taskId, verdict: 'recovered', actions }
 }
