@@ -25,6 +25,7 @@ export interface Task {
   run_id: string | null
   ticket: string | null
   failure_reason: string | null
+  failure_detail: string | null
   created_at: string
   updated_at: string
 }
@@ -55,6 +56,7 @@ export interface UpdateTaskInput {
   total_tokens?: number
   cost_usd?: number
   failure_reason?: string
+  failure_detail?: string
 }
 
 export function createTask(db: Database.Database, input: CreateTaskInput): void {
@@ -95,6 +97,7 @@ export function updateTask(db: Database.Database, id: string, input: UpdateTaskI
   if (input.total_tokens !== undefined) { sets.push('total_tokens = @total_tokens'); params.total_tokens = input.total_tokens }
   if (input.cost_usd !== undefined) { sets.push('cost_usd = @cost_usd'); params.cost_usd = input.cost_usd }
   if (input.failure_reason !== undefined) { sets.push('failure_reason = @failure_reason'); params.failure_reason = input.failure_reason }
+  if (input.failure_detail !== undefined) { sets.push('failure_detail = @failure_detail'); params.failure_detail = input.failure_detail }
 
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = @id`).run(params as any)
 }

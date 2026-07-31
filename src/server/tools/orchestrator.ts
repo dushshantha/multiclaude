@@ -251,6 +251,8 @@ export async function handleSpawnWorker(
   let agentCwd = opts.cwd
   if (opts.cwd) {
     upsertProject(db, { name: path.basename(opts.cwd), cwd: opts.cwd })
+    // Save repo_path before worktree creation so retry loop can find it even if creation fails.
+    updateTask(db, taskId, { repo_path: opts.cwd })
     try {
       let baseBranch: string | undefined
       if (task?.run_id) {
@@ -266,7 +268,8 @@ export async function handleSpawnWorker(
       agentCwd = info.path
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      updateTask(db, taskId, { status: 'failed' })
+      const failureReason = classifyWorktreeError(msg)
+      updateTask(db, taskId, { status: 'failed', failure_reason: failureReason, failure_detail: msg })
       return { ok: false, error: `Failed to create worktree for task ${taskId}: ${msg}` }
     }
   }
@@ -294,4 +297,14 @@ export function handleListProjects(db: Database.Database) {
 
 export function handleListRuns(db: Database.Database, project_id?: string): RunWithStats[] {
   return listRunsWithStats(db, project_id)
+}
+
+/**
+ * Maps a worktree creation error message to a stable machine-readable slug.
+ * Exported so tests can verify classification without calling handleSpawnWorker.
+ */
+export function classifyWorktreeError(msg: string): string {
+  if (/already exists/i.test(msg) && /branch/i.test(msg)) return 'worktree_branch_exists'
+  if (/already registered|checked out at/i.test(msg)) return 'worktree_path_registered'
+  return 'worktree_create_failed'
 }
