@@ -26,6 +26,7 @@ export interface Task {
   ticket: string | null
   failure_reason: string | null
   failure_detail: string | null
+  recovery_attempts: number
   created_at: string
   updated_at: string
 }
@@ -57,6 +58,7 @@ export interface UpdateTaskInput {
   cost_usd?: number
   failure_reason?: string
   failure_detail?: string
+  recovery_attempts?: number
 }
 
 export function createTask(db: Database.Database, input: CreateTaskInput): void {
@@ -98,6 +100,7 @@ export function updateTask(db: Database.Database, id: string, input: UpdateTaskI
   if (input.cost_usd !== undefined) { sets.push('cost_usd = @cost_usd'); params.cost_usd = input.cost_usd }
   if (input.failure_reason !== undefined) { sets.push('failure_reason = @failure_reason'); params.failure_reason = input.failure_reason }
   if (input.failure_detail !== undefined) { sets.push('failure_detail = @failure_detail'); params.failure_detail = input.failure_detail }
+  if (input.recovery_attempts !== undefined) { sets.push('recovery_attempts = @recovery_attempts'); params.recovery_attempts = input.recovery_attempts }
 
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = @id`).run(params as any)
 }
