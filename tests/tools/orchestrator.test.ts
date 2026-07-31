@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { z } from 'zod'
 import { createDb, closeDb } from '../../src/server/state/db.js'
-import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker, normalizeEffort, VALID_EFFORT_VALUES } from '../../src/server/tools/orchestrator.js'
+import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker, normalizeEffort, VALID_EFFORT_VALUES, enrichWithLastLog } from '../../src/server/tools/orchestrator.js'
 import { addEdge } from '../../src/server/state/dag.js'
 import { execSync } from 'child_process'
 import { mkdtempSync, rmSync } from 'fs'
@@ -288,5 +288,83 @@ describe('effort canonicalization', () => {
       const row = db.prepare('SELECT effort FROM tasks WHERE id = ?').get('t1') as { effort: string }
       expect(row.effort).not.toBe('extra')
     })
+  })
+})
+
+describe('last_log_at heartbeat field in system status', () => {
+  let db: ReturnType<typeof createDb>
+
+  beforeEach(() => { db = createDb(':memory:') })
+  afterEach(() => { closeDb(db) })
+
+  it('get_system_status includes last_log_at on each task', () => {
+    db.prepare("INSERT INTO tasks (id, title, status) VALUES ('t1', 'Task', 'in_progress')").run()
+    const status = handleGetSystemStatus(db, true)
+    expect(status.tasks).toHaveLength(1)
+    expect('last_log_at' in status.tasks[0]).toBe(true)
+  })
+
+  it('last_log_at is null when no log entries exist (agent merely registered)', () => {
+    db.prepare("INSERT INTO tasks (id, title, status) VALUES ('t1', 'Task', 'in_progress')").run()
+    const status = handleGetSystemStatus(db, true)
+    expect(status.tasks[0].last_log_at).toBeNull()
+  })
+
+  it('last_log_at reflects the most recent log entry timestamp', () => {
+    db.prepare("INSERT INTO tasks (id, title, status) VALUES ('t1', 'Task', 'in_progress')").run()
+    db.prepare(
+      "INSERT INTO logs (task_id, level, message, created_at) VALUES ('t1', 'info', 'started', '2026-01-01T10:00:00.000Z')"
+    ).run()
+    db.prepare(
+      "INSERT INTO logs (task_id, level, message, created_at) VALUES ('t1', 'info', 'progress', '2026-01-01T10:05:00.000Z')"
+    ).run()
+
+    const status = handleGetSystemStatus(db, true)
+    expect(status.tasks[0].last_log_at).toBe('2026-01-01T10:05:00.000Z')
+  })
+
+  it('last_log_at appears on retriableTasks as well', () => {
+    db.prepare(
+      "INSERT INTO tasks (id, title, status, retry_count, max_retries) VALUES ('t1', 'Task', 'failed', 0, 3)"
+    ).run()
+    db.prepare(
+      "INSERT INTO logs (task_id, level, message, created_at) VALUES ('t1', 'error', 'oops', '2026-01-01T09:00:00.000Z')"
+    ).run()
+
+    const status = handleGetSystemStatus(db, true)
+    expect(status.retriableTasks).toHaveLength(1)
+    expect(status.retriableTasks[0].last_log_at).toBe('2026-01-01T09:00:00.000Z')
+  })
+
+  it('enrichWithLastLog returns null for tasks with no logs', () => {
+    db.prepare("INSERT INTO tasks (id, title) VALUES ('t1', 'Task')").run()
+    const tasks = db.prepare('SELECT * FROM tasks').all() as Parameters<typeof enrichWithLastLog>[1]
+    const enriched = enrichWithLastLog(db, tasks)
+    expect(enriched[0].last_log_at).toBeNull()
+  })
+
+  it('enrichWithLastLog returns non-null for tasks with logs', () => {
+    db.prepare("INSERT INTO tasks (id, title) VALUES ('t1', 'Task')").run()
+    db.prepare(
+      "INSERT INTO logs (task_id, level, message) VALUES ('t1', 'info', 'doing work')"
+    ).run()
+    const tasks = db.prepare('SELECT * FROM tasks').all() as Parameters<typeof enrichWithLastLog>[1]
+    const enriched = enrichWithLastLog(db, tasks)
+    expect(enriched[0].last_log_at).not.toBeNull()
+  })
+
+  it('last_log_at is task-specific — different tasks have independent values', () => {
+    db.prepare("INSERT INTO tasks (id, title, status) VALUES ('t1', 'Task 1', 'in_progress')").run()
+    db.prepare("INSERT INTO tasks (id, title, status) VALUES ('t2', 'Task 2', 'in_progress')").run()
+    db.prepare(
+      "INSERT INTO logs (task_id, level, message, created_at) VALUES ('t1', 'info', 'progress', '2026-01-01T12:00:00.000Z')"
+    ).run()
+    // t2 has no logs
+
+    const status = handleGetSystemStatus(db, true)
+    const t1 = status.tasks.find(t => t.id === 't1')!
+    const t2 = status.tasks.find(t => t.id === 't2')!
+    expect(t1.last_log_at).toBe('2026-01-01T12:00:00.000Z')
+    expect(t2.last_log_at).toBeNull()
   })
 })
