@@ -2,11 +2,13 @@ import { execSync, spawn } from 'child_process'
 import { writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 
+import type Database from 'better-sqlite3'
 import type { SpawnConfig } from './index.js'
 import { buildWorkerArgs, buildWorkerEnv } from './index.js'
 import { readWorktreeGitDir } from '../git/worktree.js'
 import type { WorktreeIsolation } from './index.js'
 import type { WorkerHandle } from './backend.js'
+import { getTask } from '../server/state/tasks.js'
 
 /**
  * Captures the last `lines` lines of a tmux pane using capture-pane.
@@ -74,6 +76,93 @@ export function killTmuxWindow(windowId: string): void {
     execSync(`tmux kill-window -t ${shellQuote(windowId)}`, { stdio: 'pipe' })
   } catch {
     // Window already dead or tmux unavailable — fine
+  }
+}
+
+export interface TmuxWindowInfo {
+  windowId: string
+  windowName: string
+}
+
+/**
+ * Lists all windows in a tmux session. Returns empty array if tmux unavailable
+ * or the session does not exist.
+ */
+export function listTmuxWindows(sessionName: string): TmuxWindowInfo[] {
+  try {
+    const raw = execSync(
+      `tmux list-windows -t ${shellQuote(sessionName)} -F '#{window_id} #{window_name}'`,
+      { encoding: 'utf8', stdio: 'pipe' }
+    ).trim()
+    if (!raw) return []
+    return raw.split('\n')
+      .map(line => {
+        const spaceIdx = line.indexOf(' ')
+        if (spaceIdx < 0) return null
+        return { windowId: line.slice(0, spaceIdx), windowName: line.slice(spaceIdx + 1) }
+      })
+      .filter((w): w is TmuxWindowInfo => w !== null && w.windowId.startsWith('@'))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Returns true if a tmux window with the given @NN ID currently exists.
+ */
+export function windowExists(windowId: string): boolean {
+  try {
+    execSync(`tmux display-message -t ${shellQuote(windowId)} -p ''`, { stdio: 'pipe' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Before creating a new window for taskId, kills any existing mc-* windows
+ * whose name is `mc-w-{taskId}` or starts with `mc-w-{taskId}-` (retry
+ * windows). Uses the @NN window ID for reliable targeting.
+ */
+export function reapStaleWindows(sessionName: string, taskId: string): void {
+  const windows = listTmuxWindows(sessionName)
+  const prefix = `mc-w-${taskId}`
+  for (const w of windows) {
+    if (w.windowName === prefix || w.windowName.startsWith(`${prefix}-`)) {
+      killTmuxWindow(w.windowId)
+    }
+  }
+}
+
+/**
+ * Removes mc-* windows from a tmux session that belong to tasks already in a
+ * terminal state (done/failed/cancelled) or absent from the database.
+ * Windows not matching the `mc-` prefix are never touched.
+ */
+export function reapOrphanWindows(
+  db: Database.Database,
+  killWindow: (windowId: string) => void = killTmuxWindow,
+): void {
+  let sessionName: string
+  try {
+    sessionName = ensureTmuxSession()
+  } catch {
+    return
+  }
+  const windows = listTmuxWindows(sessionName)
+  for (const w of windows) {
+    if (!w.windowName.startsWith('mc-')) continue
+    const agentRow = db.prepare(
+      'SELECT task_id FROM agents WHERE tmux_pane = ?'
+    ).get(w.windowId) as { task_id: string | null } | undefined
+    if (!agentRow || !agentRow.task_id) {
+      killWindow(w.windowId)
+      continue
+    }
+    const task = getTask(db, agentRow.task_id)
+    if (!task || task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
+      killWindow(w.windowId)
+    }
   }
 }
 
@@ -314,10 +403,20 @@ export function spawnTmuxWorker(cfg: SpawnConfig): WorkerHandle {
   )
 
   const sessionName = ensureTmuxSession()
+  // Kill any leftover windows from prior attempts for this task before creating a new one.
+  reapStaleWindows(sessionName, cfg.taskId)
+
   // Window name is unique per agent attempt — different agent IDs for retries
   // prevent tmux from resolving -t to a stale dead window from a prior attempt.
   const windowName = `mc-${cfg.agentId}`
   const windowId = createTmuxWindow(sessionName, windowName, cfg.worktreePath)
+
+  // Verify the window actually exists; tmux can return a non-zero exit without throwing
+  // in some edge cases, leaving us with a stale @NN that targets nothing.
+  if (!windowExists(windowId)) {
+    throw new Error(`tmux window creation failed: ${windowId} ('${windowName}') does not exist after new-window`)
+  }
+
   // All targeting after this point uses the @NN window ID, not the name.
   const panePid = getTmuxPanePid(windowId)
 
