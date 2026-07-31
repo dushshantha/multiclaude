@@ -13,6 +13,7 @@ export interface Task {
   max_retries: number
   worktree_path: string | null
   branch: string | null
+  head_sha: string | null
   repo_path: string | null
   agent_id: string | null
   started_at: string | null
@@ -23,6 +24,7 @@ export interface Task {
   cost_usd: number | null
   run_id: string | null
   ticket: string | null
+  failure_reason: string | null
   created_at: string
   updated_at: string
 }
@@ -43,6 +45,7 @@ export interface UpdateTaskInput {
   retry_count?: number
   worktree_path?: string
   branch?: string
+  head_sha?: string
   repo_path?: string
   agent_id?: string
   started_at?: string
@@ -51,6 +54,7 @@ export interface UpdateTaskInput {
   output_tokens?: number
   total_tokens?: number
   cost_usd?: number
+  failure_reason?: string
 }
 
 export function createTask(db: Database.Database, input: CreateTaskInput): void {
@@ -81,6 +85,7 @@ export function updateTask(db: Database.Database, id: string, input: UpdateTaskI
   if (input.retry_count !== undefined) { sets.push('retry_count = @retry_count'); params.retry_count = input.retry_count }
   if (input.worktree_path !== undefined) { sets.push('worktree_path = @worktree_path'); params.worktree_path = input.worktree_path }
   if (input.branch !== undefined) { sets.push('branch = @branch'); params.branch = input.branch }
+  if (input.head_sha !== undefined) { sets.push('head_sha = @head_sha'); params.head_sha = input.head_sha }
   if (input.repo_path !== undefined) { sets.push('repo_path = @repo_path'); params.repo_path = input.repo_path }
   if (input.agent_id !== undefined) { sets.push('agent_id = @agent_id'); params.agent_id = input.agent_id }
   if (input.started_at !== undefined) { sets.push('started_at = @started_at'); params.started_at = input.started_at }
@@ -89,6 +94,7 @@ export function updateTask(db: Database.Database, id: string, input: UpdateTaskI
   if (input.output_tokens !== undefined) { sets.push('output_tokens = @output_tokens'); params.output_tokens = input.output_tokens }
   if (input.total_tokens !== undefined) { sets.push('total_tokens = @total_tokens'); params.total_tokens = input.total_tokens }
   if (input.cost_usd !== undefined) { sets.push('cost_usd = @cost_usd'); params.cost_usd = input.cost_usd }
+  if (input.failure_reason !== undefined) { sets.push('failure_reason = @failure_reason'); params.failure_reason = input.failure_reason }
 
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = @id`).run(params as any)
 }

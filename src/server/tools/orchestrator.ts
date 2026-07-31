@@ -241,7 +241,7 @@ export async function handleSpawnWorker(
         }
       }
       const info = await createWorktree(opts.cwd, taskId, undefined, baseBranch)
-      updateTask(db, taskId, { worktree_path: info.path, branch: info.branch, repo_path: opts.cwd })
+      updateTask(db, taskId, { worktree_path: info.path, branch: info.branch, head_sha: info.headSha, repo_path: opts.cwd })
       agentCwd = info.path
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
