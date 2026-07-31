@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { z } from 'zod'
 import { createDb, closeDb } from '../../src/server/state/db.js'
-import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker } from '../../src/server/tools/orchestrator.js'
+import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker, normalizeEffort, VALID_EFFORT_VALUES } from '../../src/server/tools/orchestrator.js'
 import { addEdge } from '../../src/server/state/dag.js'
 import { execSync } from 'child_process'
 import { mkdtempSync, rmSync } from 'fs'
@@ -224,5 +224,69 @@ describe('orchestrator tools', () => {
     const elapsed = Date.now() - start
     expect(elapsed).toBeGreaterThanOrEqual(2000)
     expect(elapsed).toBeLessThan(4000)
+  })
+})
+
+describe('effort canonicalization', () => {
+  it('normalizeEffort returns canonical value for each valid effort', () => {
+    for (const v of VALID_EFFORT_VALUES) {
+      expect(normalizeEffort(v)).toBe(v)
+    }
+  })
+
+  it('normalizeEffort normalises "extra" alias to "xhigh"', () => {
+    expect(normalizeEffort('extra')).toBe('xhigh')
+  })
+
+  it('normalizeEffort returns null for invalid effort values', () => {
+    expect(normalizeEffort('turbo')).toBeNull()
+    expect(normalizeEffort('ultra')).toBeNull()
+    expect(normalizeEffort('')).toBeNull()
+    expect(normalizeEffort('HIGH')).toBeNull()
+  })
+
+  describe('plan_dag effort integration', () => {
+    let db: ReturnType<typeof createDb>
+
+    beforeEach(() => { db = createDb(':memory:') })
+    afterEach(() => { closeDb(db) })
+
+    it('stores "xhigh" when effort is explicitly set to "xhigh"', () => {
+      handlePlanDag(db, { tasks: [{ id: 't1', title: 'Task', effort: 'xhigh', dependsOn: [] }] })
+      const row = db.prepare('SELECT effort FROM tasks WHERE id = ?').get('t1') as { effort: string }
+      expect(row.effort).toBe('xhigh')
+    })
+
+    it('normalises "extra" to "xhigh" before writing the task record', () => {
+      handlePlanDag(db, { tasks: [{ id: 't1', title: 'Task', effort: 'extra', dependsOn: [] }] })
+      const row = db.prepare('SELECT effort FROM tasks WHERE id = ?').get('t1') as { effort: string }
+      expect(row.effort).toBe('xhigh')
+    })
+
+    it('returns an error for an invalid effort value naming the valid set', () => {
+      const result = handlePlanDag(db, { tasks: [{ id: 't1', title: 'Task', effort: 'turbo', dependsOn: [] }] })
+      expect('error' in result).toBe(true)
+      const { error } = result as { error: string }
+      expect(error).toContain('turbo')
+      expect(error).toContain('xhigh')
+      expect(error).toContain('low')
+      expect(error).toContain('max')
+    })
+
+    it('accepts all canonical effort values and stores them unchanged', () => {
+      const tasks = VALID_EFFORT_VALUES.map((v, i) => ({ id: `t${i}`, title: `Task ${v}`, effort: v, dependsOn: [] }))
+      const result = handlePlanDag(db, { tasks })
+      expect('visualization' in result).toBe(true)
+      for (const [i, v] of VALID_EFFORT_VALUES.entries()) {
+        const row = db.prepare('SELECT effort FROM tasks WHERE id = ?').get(`t${i}`) as { effort: string }
+        expect(row.effort).toBe(v)
+      }
+    })
+
+    it('does not write "extra" to the task record — always normalises to "xhigh"', () => {
+      handlePlanDag(db, { tasks: [{ id: 't1', title: 'Task', effort: 'extra', dependsOn: [] }] })
+      const row = db.prepare('SELECT effort FROM tasks WHERE id = ?').get('t1') as { effort: string }
+      expect(row.effort).not.toBe('extra')
+    })
   })
 })
