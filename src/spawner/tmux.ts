@@ -45,7 +45,12 @@ export function ensureTmuxSession(): string {
     execSync(`tmux has-session -t ${shellQuote(sessionName)}`, { stdio: 'pipe' })
   } catch {
     // Session does not exist — create it detached
-    execSync(`tmux new-session -d -s ${shellQuote(sessionName)}`, { stdio: 'pipe' })
+    try {
+      execSync(`tmux new-session -d -s ${shellQuote(sessionName)}`, { stdio: 'pipe' })
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err)
+      throw new Error(`tmux_session_create_failed: ${detail}`)
+    }
   }
   return sessionName
 }
@@ -57,12 +62,18 @@ export function ensureTmuxSession(): string {
  * subsequent targeting instead of the name-based session:name form.
  */
 export function createTmuxWindow(sessionName: string, windowName: string, worktreePath: string): string {
-  const windowId = execSync(
-    `tmux new-window -d -P -F '#{window_id}' -t ${shellQuote(sessionName)}: -n ${shellQuote(windowName)} -c ${shellQuote(worktreePath)}`,
-    { encoding: 'utf8', stdio: 'pipe' }
-  ).trim()
+  let windowId: string
+  try {
+    windowId = execSync(
+      `tmux new-window -d -P -F '#{window_id}' -t ${shellQuote(sessionName)}: -n ${shellQuote(windowName)} -c ${shellQuote(worktreePath)}`,
+      { encoding: 'utf8', stdio: 'pipe' }
+    ).trim()
+  } catch (err: unknown) {
+    const detail = err instanceof Error ? err.message : String(err)
+    throw new Error(`tmux_window_create_failed: ${detail}`)
+  }
   if (!windowId) {
-    throw new Error(`Failed to get window ID for newly created tmux window '${windowName}'`)
+    throw new Error(`tmux_window_create_failed: no window ID returned for '${windowName}'`)
   }
   return windowId
 }
@@ -390,17 +401,22 @@ export function writeLaunchScript(cfg: SpawnConfig): string {
  */
 export function spawnTmuxWorker(cfg: SpawnConfig): WorkerHandle {
   const claudeDir = join(cfg.worktreePath, '.claude')
-  mkdirSync(claudeDir, { recursive: true })
-  writeFileSync(
-    join(claudeDir, 'settings.local.json'),
-    JSON.stringify({ permissions: { allow: [
-      'Bash(*)', 'Write(*)', 'Edit(*)', 'Read(*)',
-      'mcp__multiclaude-worker__get_my_task',
-      'mcp__multiclaude-worker__report_progress',
-      'mcp__multiclaude-worker__report_done',
-      'mcp__multiclaude-worker__report_blocked',
-    ] } }, null, 2)
-  )
+  try {
+    mkdirSync(claudeDir, { recursive: true })
+    writeFileSync(
+      join(claudeDir, 'settings.local.json'),
+      JSON.stringify({ permissions: { allow: [
+        'Bash(*)', 'Write(*)', 'Edit(*)', 'Read(*)',
+        'mcp__multiclaude-worker__get_my_task',
+        'mcp__multiclaude-worker__report_progress',
+        'mcp__multiclaude-worker__report_done',
+        'mcp__multiclaude-worker__report_blocked',
+      ] } }, null, 2)
+    )
+  } catch (err: unknown) {
+    const detail = err instanceof Error ? err.message : String(err)
+    throw new Error(`settings_write_failed: ${detail}`)
+  }
 
   const sessionName = ensureTmuxSession()
   // Kill any leftover windows from prior attempts for this task before creating a new one.
@@ -414,7 +430,7 @@ export function spawnTmuxWorker(cfg: SpawnConfig): WorkerHandle {
   // Verify the window actually exists; tmux can return a non-zero exit without throwing
   // in some edge cases, leaving us with a stale @NN that targets nothing.
   if (!windowExists(windowId)) {
-    throw new Error(`tmux window creation failed: ${windowId} ('${windowName}') does not exist after new-window`)
+    throw new Error(`tmux_window_create_failed: ${windowId} ('${windowName}') does not exist after new-window`)
   }
 
   // All targeting after this point uses the @NN window ID, not the name.

@@ -261,7 +261,7 @@ describe('spawnTmuxWorker — preflight reaping and window verification', () => 
 
   it('throws a structured error when the window does not exist after creation', () => {
     setupSpawnMocks({ windowExistsResult: false })
-    expect(() => spawnTmuxWorker(cfg)).toThrow(/window creation failed/)
+    expect(() => spawnTmuxWorker(cfg)).toThrow(/tmux_window_create_failed/)
   })
 
   it('includes the window name in the creation-failure error', () => {
