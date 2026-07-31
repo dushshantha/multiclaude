@@ -10,7 +10,7 @@ import { getTask, updateTask, listTasks } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
 import { handleSpawnWorker } from './server/tools/orchestrator.js'
 import { checkStuckWorkers, AGENT_NEVER_STARTED_REASON } from './spawner/stuck-watcher.js'
-import { killTmuxWindow, getChildProcessPid, reapOrphanWindows } from './spawner/tmux.js'
+import { killTmuxWindow, getChildProcessPid } from './spawner/tmux.js'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
@@ -298,13 +298,9 @@ function startSpawnerWatcher(
 
   // Stuck worker detection — runs every 60 seconds.
   // Warns at stuckWarningMinutes, times out at stuckTimeoutMinutes.
-  // Also reaps orphaned tmux windows for tasks already in terminal states.
   const stuckSince = new Map<string, number>()
   setInterval(() => {
     checkStuckWorkers(db, stuckSince, stuckWarningMinutes, stuckTimeoutMinutes)
-    if (effectiveRuntime === 'tmux') {
-      reapOrphanWindows(db)
-    }
   }, 60_000)
 }
 
