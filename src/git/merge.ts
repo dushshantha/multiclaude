@@ -81,6 +81,36 @@ async function isAncestorOf(
   }
 }
 
+/**
+ * Check whether a task branch has been merged into the integration branch.
+ * Robust to deleted local task branches: tries the local ref first, then
+ * origin/<taskBranch> as a fallback, so it succeeds even when cleanup has
+ * already removed the local branch. Returns false (never throws) when neither
+ * ref resolves — that is the conservative safe default.
+ */
+export async function isMergedInto(
+  repoPath: string,
+  taskBranch: string,
+  integBranch: string,
+): Promise<boolean> {
+  const git = simpleGit(repoPath)
+  const candidates = [taskBranch, `origin/${taskBranch}`]
+
+  for (const ref of candidates) {
+    try {
+      const ancestorSha = (await git.revparse([ref])).trim()
+      const descendantSha = (await git.revparse([integBranch])).trim()
+      if (ancestorSha === descendantSha) return true
+      const mergeBase = (await git.raw(['merge-base', ancestorSha, descendantSha])).trim()
+      if (mergeBase === ancestorSha) return true
+    } catch {
+      // ref doesn't exist or merge-base failed; try next candidate
+    }
+  }
+
+  return false
+}
+
 export async function ensureIntegrationBranch(repoPath: string, runId?: string): Promise<void> {
   const git = simpleGit(repoPath)
   const branch = getIntegBranch(runId)
