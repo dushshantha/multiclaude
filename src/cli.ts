@@ -70,6 +70,7 @@ function startSpawnerWatcher(
   db: Database.Database,
   mcpConfigPath: string,
   backend: RuntimeBackend,
+  runtime: WorkerRuntime,
   openTerminals: boolean = false,
   stuckWarningMinutes: number = 10,
   stuckTimeoutMinutes: number = 30,
@@ -361,7 +362,7 @@ function startSpawnerWatcher(
   const stuckSince = new Map<string, number>()
   setInterval(() => {
     checkStuckWorkers(db, stuckSince, stuckWarningMinutes, stuckTimeoutMinutes)
-    if (effectiveRuntime === 'tmux') {
+    if (runtime === 'tmux') {
       reapOrphanWindows(db)
     }
   }, 60_000)
@@ -426,7 +427,7 @@ async function main() {
   // Start watcher: polls DB for spawning agents and launches worker subprocesses
   const backend = createBackend(effectiveRuntime, { serverPort: port })
   startSpawnerWatcher(
-    db, mcpConfigPath, backend, openTerminals,
+    db, mcpConfigPath, backend, effectiveRuntime, openTerminals,
     multiclaudeConfig?.stuckWarningMinutes ?? 10,
     multiclaudeConfig?.stuckTimeoutMinutes ?? 30,
   )
