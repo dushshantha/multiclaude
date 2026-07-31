@@ -3,7 +3,7 @@ import { simpleGit } from 'simple-git'
 import { getTask, updateTask } from '../state/tasks.js'
 import type { Task } from '../state/tasks.js'
 import { getAgent, updateAgent } from '../state/agents.js'
-import { ensureIntegrationBranch, mergeWorktreeBranch } from '../../git/merge.js'
+import { ensureIntegrationBranch, mergeWorktreeBranch, MergeConflictError } from '../../git/merge.js'
 import { removeWorktree } from '../../git/worktree.js'
 import { calculateCost } from '../cost.js'
 import { killTmuxWindow } from '../../spawner/tmux.js'
@@ -88,13 +88,14 @@ export async function handleReportDone(
         await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
+        const failureReason = err instanceof MergeConflictError ? 'merge conflict' : 'merge failed'
         db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
-          taskId, 'error', `Merge conflict: ${task.branch} could not be merged into mc/integration — ${msg}`
+          taskId, 'error', `Merge failed: ${task.branch} could not be merged — ${msg}`
         )
         // Clean up the worktree so retries can recreate it with the same branch name
         await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch })
           .catch(() => {}) // best-effort; don't mask the original merge error
-        updateTask(db, taskId, { status: 'failed' })
+        updateTask(db, taskId, { status: 'failed', failure_reason: failureReason })
         if (task.agent_id) {
           updateAgent(db, task.agent_id, { status: 'done' })
           const agent = getAgent(db, task.agent_id)

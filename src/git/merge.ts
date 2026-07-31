@@ -4,6 +4,17 @@ import { rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
+export class MergeConflictError extends Error {
+  constructor(
+    public readonly taskBranch: string,
+    public readonly integBranch: string,
+    public readonly conflictedFiles: string[],
+  ) {
+    super(`Merge conflict: ${taskBranch} cannot be merged into ${integBranch} — conflicted files: ${conflictedFiles.join(', ')}`)
+    this.name = 'MergeConflictError'
+  }
+}
+
 export const RUN_INTEGRATION_BRANCH = (runId: string) => `mc/run-${runId}`
 const FALLBACK_INTEGRATION_BRANCH = 'mc/integration'
 
@@ -50,8 +61,8 @@ export async function mergeWorktreeBranch(repoPath: string, branch: string, runI
         const nonLockConflicts = conflicted.filter(f => !lockFiles.includes(f))
 
         if (nonLockConflicts.length > 0) {
-          await tmpGit.raw(['merge', '--abort'])
-          throw mergeErr
+          try { await tmpGit.raw(['merge', '--abort']) } catch {}
+          throw new MergeConflictError(branch, integBranch, nonLockConflicts)
         }
 
         // Auto-resolve package lock file add/add conflicts by taking theirs
@@ -65,6 +76,13 @@ export async function mergeWorktreeBranch(repoPath: string, branch: string, runI
     } finally {
       await git.raw(['worktree', 'remove', '--force', tmpDir])
       await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    }
+
+    // Verify the task branch is now an ancestor of the integration branch
+    try {
+      await git.raw(['merge-base', '--is-ancestor', branch, integBranch])
+    } catch {
+      throw new Error(`Merge verification failed: ${branch} is not an ancestor of ${integBranch} after merge`)
     }
 
     // Push integration branch to origin so the orchestrator can create a PR
