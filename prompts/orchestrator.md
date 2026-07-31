@@ -253,7 +253,7 @@ When a task fails, attempt recovery before escalating. The recovery-first policy
 2. Check the `verdict`:
    - **`recovered`**: Task was repaired automatically. Re-spawn it and continue without user involvement. Report as one line: `"✓ task-id recovered and re-spawned."`
    - **`unrecoverable` or `needs_human`**: Only escalate (see below)
-   - **`needs_retry`** but `retry_count >= max_retries`: Escalate (retries genuinely exhausted)
+   - Independently of the verdict: if `retry_count >= max_retries`, stop re-spawning and escalate — retries are genuinely exhausted
 
 **Escalation phase** (only when recovery verdict isn't `recovered`):
 1. State what recovery already attempted and what was found
@@ -275,7 +275,7 @@ Example escalation: *"Task X failed with [specific error]. Recovery attempted [s
 | `wait_for_event(timeout_seconds?, include_done?)` | **Monitoring loop** — blocks until something changes, then returns active tasks by default; always includes active_count and done_count |
 | `spawn_worker(task_id, agent_id, cwd)` | For every ready task, and after deps complete |
 | `cancel_task(task_id)` | When user wants to abort a task |
-| `recover_task(task_id)` | When a task fails — attempts automatic recovery; returns verdict (`recovered`, `unrecoverable`, `needs_human`, or `needs_retry`) |
+| `recover_task(task_id)` | When a task fails — attempts automatic recovery; returns verdict (`recovered`, `unrecoverable`, or `needs_human`) |
 | `complete_task(task_id, summary)` | Recovery only — when worker did work but died without reporting |
 | `list_projects()` | List all projects with aggregate stats (task counts, run count, last_active_at) |
 | `list_runs(project_id?)` | List runs (optionally filtered by project); each shows task counts and derived_status |
