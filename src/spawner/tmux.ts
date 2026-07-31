@@ -4,6 +4,8 @@ import { join } from 'path'
 
 import type { SpawnConfig } from './index.js'
 import { buildWorkerArgs, buildWorkerEnv } from './index.js'
+import { readWorktreeGitDir } from '../git/worktree.js'
+import type { WorktreeIsolation } from './index.js'
 import type { WorkerHandle } from './backend.js'
 
 /**
@@ -223,7 +225,12 @@ export function sendToPane(
  */
 export function writeLaunchScript(cfg: SpawnConfig): string {
   const args = buildWorkerArgs({ ...cfg, openTerminals: true })
-  const env = buildWorkerEnv(cfg.agentId)
+  let isolation: WorktreeIsolation | undefined
+  try {
+    const gitDir = readWorktreeGitDir(cfg.worktreePath)
+    isolation = { worktreePath: cfg.worktreePath, gitDir }
+  } catch { /* not a worktree — skip isolation */ }
+  const env = buildWorkerEnv(cfg.agentId, isolation)
 
   const lines: string[] = ['#!/usr/bin/env bash', 'set -e', '']
   for (const [key, val] of Object.entries(env)) {

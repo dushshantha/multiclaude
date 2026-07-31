@@ -4,6 +4,7 @@ import { writeFileSync, mkdirSync, openSync, readFileSync, existsSync } from 'fs
 import { join, dirname } from 'path'
 import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
+import { readWorktreeGitDir } from '../git/worktree.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -42,12 +43,29 @@ export function buildWorkerMcpConfig(opts: { serverPort: number }): WorkerMcpCon
   }
 }
 
-export function buildWorkerEnv(agentId: string): NodeJS.ProcessEnv {
-  const env = { ...process.env, MULTICLAUDE_AGENT_ID: agentId }
-  // Remove CLAUDECODE so spawned workers don't fail with "nested session" error
-  // if multiclaude was itself started from within a Claude Code session.
-  delete (env as Record<string, string | undefined>)['CLAUDECODE']
+export interface WorktreeIsolation {
+  worktreePath: string
+  gitDir: string
+}
+
+export function buildWorkerEnv(agentId: string, isolation?: WorktreeIsolation): NodeJS.ProcessEnv {
+  const env: Record<string, string | undefined> = { ...process.env, MULTICLAUDE_AGENT_ID: agentId }
+  delete env['CLAUDECODE']
+  if (isolation) {
+    env.GIT_DIR = isolation.gitDir
+    env.GIT_WORK_TREE = isolation.worktreePath
+    env.GIT_CEILING_DIRECTORIES = dirname(isolation.worktreePath)
+  }
   return env
+}
+
+function resolveWorktreeIsolation(worktreePath: string): WorktreeIsolation | undefined {
+  try {
+    const gitDir = readWorktreeGitDir(worktreePath)
+    return { worktreePath, gitDir }
+  } catch {
+    return undefined
+  }
 }
 
 function loadWorkerPrompt(): string {
@@ -124,10 +142,11 @@ export function spawnWorker(cfg: SpawnConfig): ChildProcess {
      } }, null, 2)
   )
   const logFd = openSync(workerLogPath(cfg.agentId), 'a')
+  const isolation = resolveWorktreeIsolation(cfg.worktreePath)
   return spawn('claude', buildWorkerArgs(cfg), {
     cwd: cfg.worktreePath,
     stdio: ['ignore', logFd, logFd],
-    env: buildWorkerEnv(cfg.agentId),
+    env: buildWorkerEnv(cfg.agentId, isolation),
   })
 }
 

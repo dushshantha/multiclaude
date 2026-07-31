@@ -138,6 +138,37 @@ describe('spawner', () => {
     else process.env['CLAUDECODE'] = orig
   })
 
+  it('buildWorkerEnv sets GIT_DIR, GIT_WORK_TREE, GIT_CEILING_DIRECTORIES when isolation provided', () => {
+    const env = buildWorkerEnv('w-task-1', {
+      worktreePath: '/tmp/mc-task-1-abcdef',
+      gitDir: '/repos/.git/worktrees/mc-task-1-abcdef',
+    })
+    expect(env.GIT_DIR).toBe('/repos/.git/worktrees/mc-task-1-abcdef')
+    expect(env.GIT_WORK_TREE).toBe('/tmp/mc-task-1-abcdef')
+    expect(env.GIT_CEILING_DIRECTORIES).toBe('/tmp')
+  })
+
+  it('buildWorkerEnv omits git isolation vars when no isolation provided', () => {
+    const saved = {
+      GIT_DIR: process.env.GIT_DIR,
+      GIT_WORK_TREE: process.env.GIT_WORK_TREE,
+      GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES,
+    }
+    delete process.env.GIT_DIR
+    delete process.env.GIT_WORK_TREE
+    delete process.env.GIT_CEILING_DIRECTORIES
+    try {
+      const env = buildWorkerEnv('w-task-1')
+      expect(env.GIT_DIR).toBeUndefined()
+      expect(env.GIT_WORK_TREE).toBeUndefined()
+      expect(env.GIT_CEILING_DIRECTORIES).toBeUndefined()
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v !== undefined) (process.env as Record<string, string>)[k] = v
+      }
+    }
+  })
+
   it('buildWorkerArgs omits --effort when effort is unset (high is the default)', () => {
     const cfg: SpawnConfig = {
       taskId: 'task-1',
