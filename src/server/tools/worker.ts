@@ -1,10 +1,11 @@
 import type Database from 'better-sqlite3'
 import { getTask, updateTask } from '../state/tasks.js'
 import type { Task } from '../state/tasks.js'
-import { updateAgent } from '../state/agents.js'
+import { getAgent, updateAgent } from '../state/agents.js'
 import { ensureIntegrationBranch, mergeWorktreeBranch } from '../../git/merge.js'
 import { removeWorktree } from '../../git/worktree.js'
 import { calculateCost } from '../cost.js'
+import { killTmuxWindow } from '../../spawner/tmux.js'
 
 export function handleGetMyTask(db: Database.Database, agentId: string): Task {
   const task = db.prepare(
@@ -69,7 +70,11 @@ export async function handleReportDone(
         await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch, taskId })
           .catch(() => {}) // best-effort; don't mask the original merge error
         updateTask(db, taskId, { status: 'failed' })
-        if (task.agent_id) updateAgent(db, task.agent_id, { status: 'done' })
+        if (task.agent_id) {
+          updateAgent(db, task.agent_id, { status: 'done' })
+          const agent = getAgent(db, task.agent_id)
+          if (agent?.tmux_pane) killTmuxWindow(agent.tmux_pane)
+        }
         return
       }
     }
@@ -88,6 +93,9 @@ export async function handleReportDone(
   // Mark the agent done so the spawner watcher's exit handler doesn't flag it as failed
   if (task?.agent_id) {
     updateAgent(db, task.agent_id, { status: 'done' })
+    // Reap the tmux window now that the task is complete
+    const agent = getAgent(db, task.agent_id)
+    if (agent?.tmux_pane) killTmuxWindow(agent.tmux_pane)
   }
 }
 

@@ -7,11 +7,12 @@ import type { RuntimeBackend, WorkerHandle } from '../../src/spawner/backend.js'
 vi.mock('../../src/spawner/tmux.js', () => ({
   spawnTmuxWorker: vi.fn(() => ({
     pid: undefined,
-    tmuxPane: 'multiclaude:mc-task-1',
+    tmuxPane: '@1',
     onExit: vi.fn(),
     onError: vi.fn(),
   })),
   captureTmuxPane: vi.fn(() => ''),
+  killTmuxWindow: vi.fn(),
 }))
 
 describe('RuntimeBackend interface', () => {
@@ -67,14 +68,14 @@ describe('WorkerHandle shape', () => {
     expect(typeof handle.onError).toBe('function')
   })
 
-  it('tmuxPane is optional and carries the window target', () => {
+  it('tmuxPane is optional and carries the @NN window ID', () => {
     const handle: WorkerHandle = {
       pid: undefined,
-      tmuxPane: 'multiclaude:mc-my-task',
+      tmuxPane: '@42',
       onExit: () => {},
       onError: () => {},
     }
-    expect(handle.tmuxPane).toBe('multiclaude:mc-my-task')
+    expect(handle.tmuxPane).toBe('@42')
   })
 
   it('pid can be undefined (spawn failure)', () => {

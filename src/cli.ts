@@ -10,6 +10,7 @@ import { getTask, updateTask, listTasks } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
 import { handleSpawnWorker } from './server/tools/orchestrator.js'
 import { checkStuckWorkers } from './spawner/stuck-watcher.js'
+import { killTmuxWindow } from './spawner/tmux.js'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
@@ -179,6 +180,8 @@ function startSpawnerWatcher(
             }
           }
         }
+        // Reap the tmux window (worker has exited; window may linger as a dead pane)
+        if (handle.tmuxPane) killTmuxWindow(handle.tmuxPane)
         if (agent.task_id) {
           const tokens = parseTokensFromLog(workerLogPath(agent.id))
           if (tokens.total_tokens !== undefined) {

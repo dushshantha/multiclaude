@@ -28,6 +28,7 @@ import {
   writeLaunchScript,
   captureTmuxPane,
   spawnTmuxWorker,
+  killTmuxWindow,
 } from '../../src/spawner/tmux.js'
 
 describe('ensureTmuxSession', () => {
@@ -87,21 +88,48 @@ describe('createTmuxWindow', () => {
     mockExecSync.mockReset()
   })
 
-  it('calls tmux new-window with correct session, name and cwd', () => {
-    mockExecSync.mockReturnValueOnce(undefined)
-    const target = createTmuxWindow('my-session', 'task-1', '/tmp/worktree')
-    expect(target).toBe('my-session:mc-task-1')
+  it('calls tmux new-window with -P -F #{window_id} and returns @NN ID', () => {
+    mockExecSync.mockReturnValueOnce('@42\n')
+    const windowId = createTmuxWindow('my-session', 'mc-w-task-1', '/tmp/worktree')
+    expect(windowId).toBe('@42')
     const call = mockExecSync.mock.calls[0][0] as string
     expect(call).toContain('new-window')
-    expect(call).toContain('-d')
-    expect(call).toContain('mc-task-1')
+    expect(call).toContain('-P')
+    expect(call).toContain('#{window_id}')
+    expect(call).toContain('mc-w-task-1')
     expect(call).toContain('/tmp/worktree')
   })
 
-  it('uses mc- prefix for window name', () => {
+  it('passes the exact windowName to tmux (caller controls the name)', () => {
+    mockExecSync.mockReturnValueOnce('@7\n')
+    const windowId = createTmuxWindow('sess', 'mc-w-my-task-retry1', '/path')
+    expect(windowId).toBe('@7')
+    const call = mockExecSync.mock.calls[0][0] as string
+    expect(call).toContain('mc-w-my-task-retry1')
+  })
+
+  it('throws when tmux returns an empty window ID', () => {
+    mockExecSync.mockReturnValueOnce('\n')
+    expect(() => createTmuxWindow('sess', 'mc-w-task', '/path')).toThrow(/Failed to get window ID/)
+  })
+})
+
+describe('killTmuxWindow', () => {
+  beforeEach(() => {
+    mockExecSync.mockReset()
+  })
+
+  it('calls tmux kill-window with the given window ID', () => {
     mockExecSync.mockReturnValueOnce(undefined)
-    const target = createTmuxWindow('sess', 'my-task', '/path')
-    expect(target).toContain('mc-my-task')
+    killTmuxWindow('@42')
+    const call = mockExecSync.mock.calls[0][0] as string
+    expect(call).toContain('kill-window')
+    expect(call).toContain('@42')
+  })
+
+  it('silently ignores errors when window is already dead', () => {
+    mockExecSync.mockImplementationOnce(() => { throw new Error('no such window') })
+    expect(() => killTmuxWindow('@42')).not.toThrow()
   })
 })
 
@@ -255,27 +283,26 @@ describe('spawnTmuxWorker', () => {
     mcpConfigPath: '/tmp/mcp.json',
   }
 
+  // Helper: sets up the standard 4-call mock sequence (not-in-tmux path)
+  // 1. has-session (ensureTmuxSession)
+  // 2. new-window -P -F #{window_id} (createTmuxWindow → returns windowId)
+  // 3. display-message pane_pid (getTmuxPanePid)
+  // 4. send-keys (sendTmuxKeys)
+  function setupDefaultMocks({ windowId = '@42', pid = '9999\n' } = {}) {
+    mockExecSync.mockReset()
+    mockExecSync.mockReturnValueOnce(undefined)     // has-session succeeds
+    mockExecSync.mockReturnValueOnce(`${windowId}\n`) // new-window returns @NN
+    mockExecSync.mockReturnValueOnce(pid)            // pane PID
+    mockExecSync.mockReturnValueOnce(undefined)      // send-keys
+  }
+
   beforeEach(() => {
     mockExecSync.mockReset()
     mockSpawn.mockReset()
     mockWriteFileSync.mockReset()
     mockMkdirSync.mockReset()
-
-    // Default stubs for the full spawn sequence:
-    // 1. ensureTmuxSession (inside tmux check) — return session name
-    mockExecSync.mockReturnValueOnce('multiclaude\n')
-    // (Not inside $TMUX; has-session succeeds so no new-session call)
-    // 2. createTmuxWindow — succeeds silently
-    mockExecSync.mockReturnValueOnce(undefined)
-    // 3. getTmuxPanePid — returns a PID
-    mockExecSync.mockReturnValueOnce('9999\n')
-    // 4. sendTmuxKeys — send the launch script command
-    mockExecSync.mockReturnValueOnce(undefined)
-
-    // Monitor spawn
+    setupDefaultMocks()
     mockSpawn.mockReturnValue({ on: vi.fn(), unref: vi.fn() })
-
-    // Ensure not inside tmux for deterministic session path
     delete process.env.TMUX
   })
 
@@ -283,25 +310,45 @@ describe('spawnTmuxWorker', () => {
     delete process.env.TMUX
   })
 
-  it('returns a WorkerHandle with tmuxPane set to session:mc-<taskId>', () => {
-    // ensureTmuxSession: has-session succeeds → 'multiclaude'
-    mockExecSync.mockReset()
-    mockExecSync.mockReturnValueOnce(undefined)    // has-session succeeds
-    mockExecSync.mockReturnValueOnce(undefined)    // new-window
-    mockExecSync.mockReturnValueOnce('9999\n')     // pane PID
-    mockExecSync.mockReturnValueOnce(undefined)    // send-keys
-
+  it('returns a WorkerHandle with tmuxPane set to the @NN window ID', () => {
+    setupDefaultMocks({ windowId: '@42' })
     const handle = spawnTmuxWorker(cfg)
-    expect(handle.tmuxPane).toBe('multiclaude:mc-task-42')
+    expect(handle.tmuxPane).toBe('@42')
+  })
+
+  it('uses a unique window name per agent (mc-<agentId>)', () => {
+    setupDefaultMocks()
+    spawnTmuxWorker(cfg)
+    const calls = mockExecSync.mock.calls.map(c => c[0] as string)
+    const newWindowCall = calls.find(c => c.includes('new-window'))
+    expect(newWindowCall).toBeDefined()
+    // Window name should embed the agentId, not just the taskId
+    expect(newWindowCall).toContain('mc-w-task-42')
+  })
+
+  it('different agentIds produce different window names', () => {
+    const windowNames: string[] = []
+    for (const agentId of ['w-task-1', 'w-task-1-retry1', 'w-task-1-retry2']) {
+      mockExecSync.mockReset()
+      mockExecSync.mockReturnValueOnce(undefined)    // has-session
+      mockExecSync.mockReturnValueOnce('@99\n')       // new-window
+      mockExecSync.mockReturnValueOnce('1234\n')     // pane PID
+      mockExecSync.mockReturnValueOnce(undefined)    // send-keys
+      mockSpawn.mockReturnValue({ on: vi.fn(), unref: vi.fn() })
+      spawnTmuxWorker({ ...cfg, agentId })
+      const calls = mockExecSync.mock.calls.map(c => c[0] as string)
+      const newWindowCall = calls.find(c => c.includes('new-window'))!
+      // Extract the -n 'mc-...' part
+      const match = newWindowCall.match(/-n '([^']+)'/)
+      windowNames.push(match?.[1] ?? '')
+      mockExecSync.mockReset()
+    }
+    // All three window names must be unique
+    expect(new Set(windowNames).size).toBe(3)
   })
 
   it('sets pid from getTmuxPanePid output', () => {
-    mockExecSync.mockReset()
-    mockExecSync.mockReturnValueOnce(undefined)    // has-session
-    mockExecSync.mockReturnValueOnce(undefined)    // new-window
-    mockExecSync.mockReturnValueOnce('12345\n')    // pane PID
-    mockExecSync.mockReturnValueOnce(undefined)    // send-keys
-
+    setupDefaultMocks({ pid: '12345\n' })
     const handle = spawnTmuxWorker(cfg)
     expect(handle.pid).toBe(12345)
   })
@@ -309,7 +356,7 @@ describe('spawnTmuxWorker', () => {
   it('pid is undefined when getTmuxPanePid fails', () => {
     mockExecSync.mockReset()
     mockExecSync.mockReturnValueOnce(undefined)                              // has-session
-    mockExecSync.mockReturnValueOnce(undefined)                              // new-window
+    mockExecSync.mockReturnValueOnce('@42\n')                                // new-window
     mockExecSync.mockImplementationOnce(() => { throw new Error('nopid') }) // pane PID fails
     mockExecSync.mockReturnValueOnce(undefined)                              // send-keys
 
@@ -317,62 +364,38 @@ describe('spawnTmuxWorker', () => {
     expect(handle.pid).toBeUndefined()
   })
 
-  it('spawns a tmux wait-for monitor process for the exit signal', () => {
-    mockExecSync.mockReset()
-    mockExecSync.mockReturnValueOnce(undefined)  // has-session
-    mockExecSync.mockReturnValueOnce(undefined)  // new-window
-    mockExecSync.mockReturnValueOnce('9999\n')   // PID
-    mockExecSync.mockReturnValueOnce(undefined)  // send-keys
-
+  it('spawns a tmux wait-for monitor using the agentId in the signal name', () => {
+    setupDefaultMocks()
     spawnTmuxWorker(cfg)
-
     expect(mockSpawn).toHaveBeenCalledWith(
       'tmux',
-      ['wait-for', 'mc-task-42-exit'],
+      ['wait-for', 'mc-w-task-42-exit'],
       expect.objectContaining({ stdio: 'ignore', detached: false })
     )
   })
 
-  it('sends the launch script to the pane via send-keys', () => {
-    mockExecSync.mockReset()
-    mockExecSync.mockReturnValueOnce(undefined)  // has-session
-    mockExecSync.mockReturnValueOnce(undefined)  // new-window
-    mockExecSync.mockReturnValueOnce('9999\n')   // PID
-    mockExecSync.mockReturnValueOnce(undefined)  // send-keys
-
+  it('targets send-keys at the @NN window ID, not a name-based target', () => {
+    setupDefaultMocks({ windowId: '@42' })
     spawnTmuxWorker(cfg)
-
     const calls = mockExecSync.mock.calls.map(c => c[0] as string)
     const sendKeysCall = calls.find(c => c.includes('send-keys') && c.includes('worker-launch.sh'))
     expect(sendKeysCall).toBeDefined()
-    // Should include "Enter" to execute the command
+    expect(sendKeysCall).toContain('@42')
     expect(sendKeysCall).toContain('Enter')
   })
 
   it('appends tmux wait-for signal to the send-keys command', () => {
-    mockExecSync.mockReset()
-    mockExecSync.mockReturnValueOnce(undefined)  // has-session
-    mockExecSync.mockReturnValueOnce(undefined)  // new-window
-    mockExecSync.mockReturnValueOnce('9999\n')   // PID
-    mockExecSync.mockReturnValueOnce(undefined)  // send-keys
-
+    setupDefaultMocks()
     spawnTmuxWorker(cfg)
-
     const calls = mockExecSync.mock.calls.map(c => c[0] as string)
     const sendKeysCall = calls.find(c => c.includes('send-keys'))
     expect(sendKeysCall).toContain('wait-for -S')
-    expect(sendKeysCall).toContain('mc-task-42-exit')
+    expect(sendKeysCall).toContain('mc-w-task-42-exit')
   })
 
   it('writes settings.local.json before spawning', () => {
-    mockExecSync.mockReset()
-    mockExecSync.mockReturnValueOnce(undefined)  // has-session
-    mockExecSync.mockReturnValueOnce(undefined)  // new-window
-    mockExecSync.mockReturnValueOnce('9999\n')   // PID
-    mockExecSync.mockReturnValueOnce(undefined)  // send-keys
-
+    setupDefaultMocks()
     spawnTmuxWorker(cfg)
-
     const settingsCall = mockWriteFileSync.mock.calls.find(
       (c: unknown[]) => (c[0] as string).includes('settings.local.json')
     )
@@ -382,12 +405,7 @@ describe('spawnTmuxWorker', () => {
   })
 
   it('exposes onExit and onError via the monitor process events', () => {
-    mockExecSync.mockReset()
-    mockExecSync.mockReturnValueOnce(undefined)  // has-session
-    mockExecSync.mockReturnValueOnce(undefined)  // new-window
-    mockExecSync.mockReturnValueOnce('9999\n')   // PID
-    mockExecSync.mockReturnValueOnce(undefined)  // send-keys
-
+    setupDefaultMocks()
     const onMock = vi.fn()
     mockSpawn.mockReturnValue({ on: onMock, unref: vi.fn() })
 

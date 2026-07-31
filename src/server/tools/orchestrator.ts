@@ -3,10 +3,11 @@ import { simpleGit } from 'simple-git'
 import type Database from 'better-sqlite3'
 import { createTask, listTasks, getTask, updateTask } from '../state/tasks.js'
 import { addEdge, getReadyTasks, getBlockers } from '../state/dag.js'
-import { listAgents, registerAgent, updateAgent } from '../state/agents.js'
+import { getAgent, listAgents, registerAgent, updateAgent } from '../state/agents.js'
 import { upsertProject, listProjects } from '../state/projects.js'
 import { createRun, getRun, listRunsWithStats, RunWithStats } from '../state/runs.js'
 import { createWorktree } from '../../git/worktree.js'
+import { killTmuxWindow } from '../../spawner/tmux.js'
 
 export interface EpicTask {
   id: string
@@ -145,6 +146,12 @@ export function handleCancelTask(db: Database.Database, taskId: string): void {
   db.prepare(
     "UPDATE tasks SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?"
   ).run(taskId)
+  // Reap the tmux window if one exists for this task's agent
+  const task = getTask(db, taskId)
+  if (task?.agent_id) {
+    const agent = getAgent(db, task.agent_id)
+    if (agent?.tmux_pane) killTmuxWindow(agent.tmux_pane)
+  }
 }
 
 export function handleCompleteTask(
