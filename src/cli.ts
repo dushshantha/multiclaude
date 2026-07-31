@@ -2,15 +2,16 @@
 import { startCoordServer } from './server/index.js'
 import { startWebServer } from './web/server.js'
 import { startTui } from './tui/index.js'
-import { writeWorkerMcpConfig, workerLogPath } from './spawner/index.js'
+import { writeWorkerMcpConfig, workerLogPath, classifyLaunchError } from './spawner/index.js'
 import { createBackend } from './spawner/backend.js'
 import type { RuntimeBackend } from './spawner/backend.js'
 import { openWorkerTerminal } from './spawner/terminal.js'
 import { getTask, updateTask, listTasks } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
-import { handleSpawnWorker } from './server/tools/orchestrator.js'
+import { handleSpawnWorker, handleRecoverTask } from './server/tools/orchestrator.js'
+import { shouldAttemptRecovery, applyRecoveryOutcome, MAX_RECOVERY_ATTEMPTS } from './spawner/auto-recovery.js'
 import { checkStuckWorkers, AGENT_NEVER_STARTED_REASON } from './spawner/stuck-watcher.js'
-import { killTmuxWindow, getChildProcessPid } from './spawner/tmux.js'
+import { killTmuxWindow, getChildProcessPid, reapOrphanWindows } from './spawner/tmux.js'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
@@ -75,25 +76,86 @@ function startSpawnerWatcher(
 ): void {
   const launched = new Set<string>()
   const retried = new Set<string>()  // tracks "{taskId}-{retryAttempt}" to avoid double-spawning
+  const recovering = new Set<string>()  // tasks currently undergoing async auto-recovery
 
   setInterval(() => {
     // Auto-retry failed tasks that still have remaining retries
     const failedTasks = listTasks(db, 'failed').filter(t => t.retry_count < t.max_retries)
     for (const task of failedTasks) {
+      if (recovering.has(task.id)) continue  // async recovery already in flight
+
       const retryAttempt = task.retry_count + 1
       const retryKey = `${task.id}-${retryAttempt}`
       if (retried.has(retryKey)) continue
-      retried.add(retryKey)
 
-      // Find cwd from the most recent agent for this task
+      // Find cwd from the most recent agent for this task, or fall back to repo_path
+      // (repo_path is saved early in handleSpawnWorker before worktree creation, so it
+      // exists even when the agent was never registered due to a worktree creation failure).
       const prevAgent = db.prepare(
         "SELECT * FROM agents WHERE task_id = ? ORDER BY created_at DESC LIMIT 1"
       ).get(task.id) as AgentRow | undefined
 
-      if (!prevAgent?.cwd) {
+      const retryCwd = prevAgent?.cwd ?? task.repo_path ?? null
+      if (!retryCwd) {
         console.warn(`[spawner] Cannot retry task ${task.id}: no cwd found for previous agent`)
         continue
       }
+
+      // --- Auto-recovery: attempt environment repair BEFORE consuming a retry slot ---
+      // Only runs when there is a machine-readable failure_reason (environment issue).
+
+      if (task.failure_reason) {
+        if (shouldAttemptRecovery(task)) {
+          // Mark as in-flight to prevent duplicate recovery in the next tick.
+          recovering.add(task.id)
+          retried.add(retryKey)
+
+          console.log(
+            `[spawner] Auto-recovering task ${task.id} (recovery attempt ${task.recovery_attempts + 1}/${MAX_RECOVERY_ATTEMPTS}, failure: ${task.failure_reason})`
+          )
+
+          void handleRecoverTask(db, task.id).then(result => {
+            recovering.delete(task.id)
+            const outcome = applyRecoveryOutcome(db, task, result)
+
+            if (outcome === 'respawn') {
+              // Recovery repaired the environment — re-spawn without consuming a retry slot.
+              const recoveryAgentId = `w-${task.id}-r${task.recovery_attempts + 1}`
+              void handleSpawnWorker(db, task.id, recoveryAgentId, { cwd: retryCwd }).then(spawnResult => {
+                if (!spawnResult.ok) {
+                  console.error(`[spawner] Failed to respawn after recovery for task ${task.id}: ${spawnResult.error}`)
+                  updateTask(db, task.id, { status: 'failed' })
+                }
+                // Remove the key so a subsequent failure gets a fresh recovery attempt.
+                retried.delete(retryKey)
+              })
+            } else {
+              // Needs human or unrecoverable — task already exhausted in applyRecoveryOutcome.
+              console.warn(`[spawner] Task ${task.id} recovery verdict: ${result.verdict} — ${result.reason ?? 'no details'}`)
+              retried.delete(retryKey)
+            }
+          })
+          continue
+        }
+
+        // Recovery cap reached — fail permanently without consuming a retry slot.
+        retried.add(retryKey)
+        console.warn(`[spawner] Task ${task.id} hit recovery cap (${MAX_RECOVERY_ATTEMPTS}) — escalating`)
+        db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+          task.id, 'error',
+          `Recovery cap (${MAX_RECOVERY_ATTEMPTS}) reached — manual intervention required`
+        )
+        updateTask(db, task.id, {
+          status: 'failed',
+          retry_count: task.max_retries,
+          failure_reason: 'recovery_cap_reached',
+          failure_detail: `Auto-recovery attempted ${MAX_RECOVERY_ATTEMPTS} times without success`,
+        })
+        continue
+      }
+
+      // --- Normal retry (no machine-readable failure_reason) ---
+      retried.add(retryKey)
 
       // Get failure reason from the most recent error/warn log entry (skip info-level
       // "Retry attempt" messages so the reason doesn't nest recursively on each retry)
@@ -114,11 +176,13 @@ function startSpawnerWatcher(
       )
 
       // Register new agent and transition task to in_progress
-      void handleSpawnWorker(db, task.id, newAgentId, { cwd: prevAgent.cwd }).then(result => {
+      void handleSpawnWorker(db, task.id, newAgentId, { cwd: retryCwd }).then(result => {
         if (!result.ok) {
           console.error(`[spawner] Failed to register retry worker for task ${task.id}: ${result.error}`)
-          // Revert so we can retry again on the next tick
-          updateTask(db, task.id, { retry_count: task.retry_count, status: 'failed' })
+          // Keep retry_count at retryAttempt (already written) so the next retry key
+          // advances. Reverting to task.retry_count caused infinite loops because the
+          // retried set was cleared while retry_count stayed at 0.
+          updateTask(db, task.id, { status: 'failed' })
           retried.delete(retryKey)
         }
       })
@@ -161,7 +225,17 @@ function startSpawnerWatcher(
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
         console.error(`[spawner] Failed to launch worker ${agent.id}: ${msg}`)
-        updateAgent(db, agent.id, { status: 'failed' })
+        const failureReason = classifyLaunchError(msg)
+        updateAgent(db, agent.id, { status: 'failed', failure_reason: failureReason, failure_detail: msg })
+        if (agent.task_id) {
+          const t = getTask(db, agent.task_id)
+          if (t && t.status !== 'done') {
+            updateTask(db, agent.task_id, { status: 'failed', failure_reason: failureReason, failure_detail: msg })
+          }
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            agent.task_id, 'error', `${failureReason}: ${msg}`
+          )
+        }
         continue
       }
 
@@ -232,13 +306,18 @@ function startSpawnerWatcher(
       }
 
       handle.onError((err) => {
-        console.error(`[spawner] Failed to launch worker ${agent.id}: ${err.message}`)
-        updateAgent(db, agent.id, { status: 'failed' })
+        const msg = err.message
+        console.error(`[spawner] Failed to launch worker ${agent.id}: ${msg}`)
+        const failureReason = classifyLaunchError(msg)
+        updateAgent(db, agent.id, { status: 'failed', failure_reason: failureReason, failure_detail: msg })
         if (agent.task_id) {
           const t = getTask(db, agent.task_id)
           if (t && t.status !== 'done') {
-            updateTask(db, agent.task_id, { status: 'failed' })
+            updateTask(db, agent.task_id, { status: 'failed', failure_reason: failureReason, failure_detail: msg })
           }
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            agent.task_id, 'error', `${failureReason}: ${msg}`
+          )
         }
       })
 
@@ -278,9 +357,13 @@ function startSpawnerWatcher(
 
   // Stuck worker detection — runs every 60 seconds.
   // Warns at stuckWarningMinutes, times out at stuckTimeoutMinutes.
+  // Also reaps orphaned tmux windows for tasks already in terminal states.
   const stuckSince = new Map<string, number>()
   setInterval(() => {
     checkStuckWorkers(db, stuckSince, stuckWarningMinutes, stuckTimeoutMinutes)
+    if (effectiveRuntime === 'tmux') {
+      reapOrphanWindows(db)
+    }
   }, 60_000)
 }
 

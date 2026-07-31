@@ -129,18 +129,23 @@ export function spawnWorker(cfg: SpawnConfig): ChildProcess {
   // output (reasoning, tool calls, text) for post-mortem debugging and live
   // tailing with: tail -f <path>
   const claudeDir = join(cfg.worktreePath, '.claude')
-  mkdirSync(claudeDir, { recursive: true })
-  writeFileSync(
-    join(claudeDir, 'settings.local.json'),
-    JSON.stringify({ permissions: { allow:
-      ['Bash(*)', 'Write(*)', 'Edit(*)', 'Read(*)',
-        'mcp__multiclaude-worker__get_my_task',
-        'mcp__multiclaude-worker__report_progress',
-        'mcp__multiclaude-worker__report_done',
-        'mcp__multiclaude-worker__report_blocked'
-      ]
-     } }, null, 2)
-  )
+  try {
+    mkdirSync(claudeDir, { recursive: true })
+    writeFileSync(
+      join(claudeDir, 'settings.local.json'),
+      JSON.stringify({ permissions: { allow:
+        ['Bash(*)', 'Write(*)', 'Edit(*)', 'Read(*)',
+          'mcp__multiclaude-worker__get_my_task',
+          'mcp__multiclaude-worker__report_progress',
+          'mcp__multiclaude-worker__report_done',
+          'mcp__multiclaude-worker__report_blocked'
+        ]
+       } }, null, 2)
+    )
+  } catch (err: unknown) {
+    const detail = err instanceof Error ? err.message : String(err)
+    throw new Error(`settings_write_failed: ${detail}`)
+  }
   const logFd = openSync(workerLogPath(cfg.agentId), 'a')
   const isolation = resolveWorktreeIsolation(cfg.worktreePath)
   return spawn('claude', buildWorkerArgs(cfg), {
@@ -148,6 +153,27 @@ export function spawnWorker(cfg: SpawnConfig): ChildProcess {
     stdio: ['ignore', logFd, logFd],
     env: buildWorkerEnv(cfg.agentId, isolation),
   })
+}
+
+const KNOWN_FAILURE_REASON_PREFIXES = [
+  'tmux_window_create_failed',
+  'tmux_session_create_failed',
+  'settings_write_failed',
+  'agent_launch_failed',
+] as const
+
+/**
+ * Maps a launch error message to a stable machine-readable slug.
+ * Functions in tmux.ts and spawnWorker re-throw errors prefixed with a slug
+ * (e.g. "tmux_window_create_failed: ...") so the classifier can extract it.
+ * Exported for testing.
+ */
+export function classifyLaunchError(msg: string): string {
+  for (const prefix of KNOWN_FAILURE_REASON_PREFIXES) {
+    if (msg.startsWith(prefix + ':') || msg === prefix) return prefix
+  }
+  if (/ENOENT|EACCES|EPERM|EISDIR/.test(msg)) return 'settings_write_failed'
+  return 'agent_launch_failed'
 }
 
 export function writeWorkerMcpConfig(serverPort: number, configDir: string = tmpdir()): string {

@@ -3,7 +3,7 @@ import { simpleGit } from 'simple-git'
 import { getTask, updateTask } from '../state/tasks.js'
 import type { Task } from '../state/tasks.js'
 import { getAgent, updateAgent } from '../state/agents.js'
-import { ensureIntegrationBranch, mergeWorktreeBranch, MergeConflictError } from '../../git/merge.js'
+import { ensureIntegrationBranch, mergeWorktreeBranch, MergeConflictError, isMergedInto } from '../../git/merge.js'
 import { removeWorktree } from '../../git/worktree.js'
 import { calculateCost } from '../cost.js'
 import { killTmuxWindow } from '../../spawner/tmux.js'
@@ -77,32 +77,63 @@ export async function handleReportDone(
           // If rev-parse fails (branch gone?), fall through to normal merge which will surface the real error
         }
       }
+      const runId = task.run_id ?? undefined
+      const integBranch = runId ? `mc/run-${runId}` : 'mc/integration'
+
+      // Tightly-scoped merge block — only the merge itself, never cleanup.
+      // Keeping removeWorktree outside ensures a cleanup error cannot be
+      // misattributed as "merge failed" and block downstream DAG tasks.
       try {
-        const runId = task.run_id ?? undefined
         await ensureIntegrationBranch(projectCwd, runId)
         await mergeWorktreeBranch(projectCwd, task.branch, runId, task.worktree_path)
-        const integBranch = runId ? `mc/run-${runId}` : 'mc/integration'
         db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
           taskId, 'info', `Merged and pushed ${task.branch} to origin/${integBranch}`
         )
-        await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
-        const failureReason = err instanceof MergeConflictError ? 'merge conflict' : 'merge failed'
-        db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
-          taskId, 'error', `Merge failed: ${task.branch} could not be merged — ${msg}`
-        )
-        // Clean up the worktree so retries can recreate it with the same branch name
-        await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch })
-          .catch(() => {}) // best-effort; don't mask the original merge error
-        updateTask(db, taskId, { status: 'failed', failure_reason: failureReason })
-        if (task.agent_id) {
-          updateAgent(db, task.agent_id, { status: 'done' })
-          const agent = getAgent(db, task.agent_id)
-          if (agent?.tmux_pane) killTmuxWindow(agent.tmux_pane)
+
+        // Before marking failed, verify the merge didn't actually land.
+        // Guards against errors thrown inside mergeWorktreeBranch after the
+        // merge commit was made (e.g. push errors) causing false failures.
+        let landed = false
+        try {
+          landed = await isMergedInto(projectCwd, task.branch, integBranch)
+        } catch { /* conservative: assume not landed */ }
+
+        if (landed) {
+          // Merge landed; error came from post-merge code inside mergeWorktreeBranch.
+          // Log it as a non-fatal warning and fall through to mark the task done.
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            taskId, 'warn', `post_merge_cleanup_failed: ${msg}`
+          )
+        } else {
+          // Genuine merge failure — mark the task failed.
+          const failureReason = err instanceof MergeConflictError ? 'merge conflict' : 'merge failed'
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            taskId, 'error', `Merge failed: ${task.branch} could not be merged — ${msg}`
+          )
+          // Clean up the worktree so retries can recreate it with the same branch name
+          await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch })
+            .catch(() => {}) // best-effort; don't mask the original merge error
+          updateTask(db, taskId, { status: 'failed', failure_reason: failureReason })
+          if (task.agent_id) {
+            updateAgent(db, task.agent_id, { status: 'done' })
+            const agent = getAgent(db, task.agent_id)
+            if (agent?.tmux_pane) killTmuxWindow(agent.tmux_pane)
+          }
+          return
         }
-        return
       }
+
+      // Post-merge cleanup — outside the merge try/catch so a cleanup error
+      // never sets failure_reason "merge failed". Non-fatal: log and continue.
+      await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch })
+        .catch((cleanupErr: unknown) => {
+          const msg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            taskId, 'warn', `post_merge_cleanup_failed: ${msg}`
+          )
+        })
     }
   }
   updateTask(db, taskId, {

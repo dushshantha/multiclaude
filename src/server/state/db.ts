@@ -45,6 +45,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
       run_id TEXT REFERENCES runs(id),
       ticket TEXT,
       failure_reason TEXT,
+      failure_detail TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -61,6 +62,8 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
       pid INTEGER,
       status TEXT NOT NULL DEFAULT 'spawning',
       cwd TEXT,
+      failure_reason TEXT,
+      failure_detail TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -91,6 +94,10 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
   try { db.exec("ALTER TABLE tasks ADD COLUMN ticket TEXT") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN head_sha TEXT") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN failure_reason TEXT") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN failure_detail TEXT") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE agents ADD COLUMN failure_reason TEXT") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE agents ADD COLUMN failure_detail TEXT") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN recovery_attempts INTEGER NOT NULL DEFAULT 0") } catch { /* already exists */ }
   return db
 }
 

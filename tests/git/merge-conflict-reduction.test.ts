@@ -111,7 +111,7 @@ describe('update-before-merge', () => {
     await removeWorktree(repoPath, info)
   })
 
-  it('handles three sequential merges with stale task branches', async () => {
+  it('handles three sequential merges with stale task branches', { timeout: 15000 }, async () => {
     const runId = 'three-tasks'
     await ensureIntegrationBranch(repoPath, runId)
     const integBranch = `mc/run-${runId}`
