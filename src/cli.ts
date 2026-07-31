@@ -9,7 +9,8 @@ import { openWorkerTerminal } from './spawner/terminal.js'
 import { getTask, updateTask, listTasks } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
 import { handleSpawnWorker } from './server/tools/orchestrator.js'
-import { checkStuckWorkers } from './spawner/stuck-watcher.js'
+import { checkStuckWorkers, AGENT_NEVER_STARTED_REASON } from './spawner/stuck-watcher.js'
+import { killTmuxWindow, getChildProcessPid } from './spawner/tmux.js'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
@@ -24,6 +25,26 @@ interface AgentRow {
   cwd: string | null
   pid: number | null
   status: string
+}
+
+/**
+ * Scans a worker log file for non-JSON lines, which are CLI stderr output
+ * (warnings, errors from the claude binary itself rather than Claude's responses).
+ * These surface issues like unrecognised flags so they appear in the task log
+ * without requiring the user to open the log file or tmux pane.
+ */
+function parseCliWarnings(logPath: string): string[] {
+  try {
+    const lines = readFileSync(logPath, 'utf8').split('\n')
+    const result: string[] = []
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try { JSON.parse(trimmed); continue } catch { /* not JSON — likely CLI stderr */ }
+      result.push(trimmed)
+    }
+    return result
+  } catch { return [] }
 }
 
 function parseTokensFromLog(logPath: string): { input_tokens?: number; output_tokens?: number; total_tokens?: number } {
@@ -151,6 +172,61 @@ function startSpawnerWatcher(
         updateAgent(db, agent.id, { tmux_pane: handle.tmuxPane })
       }
 
+      // For tmux workers: verify the agent process actually started inside the pane.
+      // The pane shell sends keys but Enter may not land; the pid recorded above is
+      // the pane's shell, not claude. Poll asynchronously so we don't block the
+      // event loop. If no child process appears within ~4s the agent never started.
+      if (handle.tmuxPane !== undefined && handle.pid !== undefined) {
+        const panePid = handle.pid
+        const capturedAgentId = agent.id
+        const capturedTaskId = agent.task_id!
+        const capturedPane = handle.tmuxPane
+
+        let verifyAttempts = 0
+        const maxVerifyAttempts = 5
+        const verifyIntervalMs = 800
+
+        const verifyAgentStarted = () => {
+          // If the agent has already exited or been marked (by onExit/onError), stop.
+          const agentRow = db.prepare('SELECT status FROM agents WHERE id = ?')
+            .get(capturedAgentId) as { status: string } | undefined
+          if (agentRow?.status !== 'spawning') return
+
+          const childPid = getChildProcessPid(panePid)
+
+          if (childPid !== undefined) {
+            // Agent process found — record the actual agent pid, not the shell
+            updateAgent(db, capturedAgentId, { pid: childPid })
+            return
+          }
+
+          verifyAttempts++
+          if (verifyAttempts < maxVerifyAttempts) {
+            setTimeout(verifyAgentStarted, verifyIntervalMs)
+            return
+          }
+
+          // All attempts exhausted — agent process never started
+          const current = db.prepare('SELECT status FROM agents WHERE id = ?')
+            .get(capturedAgentId) as { status: string } | undefined
+          if (current?.status !== 'spawning') return  // already handled
+
+          console.warn(`[spawner] ${AGENT_NEVER_STARTED_REASON} for agent ${capturedAgentId}`)
+          updateAgent(db, capturedAgentId, { status: 'failed' })
+          const t = getTask(db, capturedTaskId)
+          if (t && t.status !== 'done' && t.status !== 'failed') {
+            updateTask(db, capturedTaskId, { status: 'failed' })
+          }
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            capturedTaskId, 'error', AGENT_NEVER_STARTED_REASON
+          )
+          killTmuxWindow(capturedPane)
+        }
+
+        // Give the tmux send-keys a moment to execute before first check
+        setTimeout(verifyAgentStarted, 2000)
+      }
+
       if (openTerminals) {
         openWorkerTerminal(agent.id, workerLogPath(agent.id))
       }
@@ -179,10 +255,21 @@ function startSpawnerWatcher(
             }
           }
         }
+        // Reap the tmux window (worker has exited; window may linger as a dead pane)
+        if (handle.tmuxPane) killTmuxWindow(handle.tmuxPane)
         if (agent.task_id) {
-          const tokens = parseTokensFromLog(workerLogPath(agent.id))
+          const logPath = workerLogPath(agent.id)
+          const tokens = parseTokensFromLog(logPath)
           if (tokens.total_tokens !== undefined) {
             updateTask(db, agent.task_id, tokens)
+          }
+          // Surface any CLI stderr warnings (non-JSON lines) to the task log
+          // so issues like invalid flags are visible without reading the log file.
+          const warnings = parseCliWarnings(logPath)
+          for (const warning of warnings) {
+            db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+              agent.task_id, 'warn', `[claude-cli] ${warning}`
+            )
           }
         }
       })

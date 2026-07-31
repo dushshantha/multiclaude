@@ -1,10 +1,12 @@
 import type Database from 'better-sqlite3'
+import { simpleGit } from 'simple-git'
 import { getTask, updateTask } from '../state/tasks.js'
 import type { Task } from '../state/tasks.js'
-import { updateAgent } from '../state/agents.js'
-import { ensureIntegrationBranch, mergeWorktreeBranch } from '../../git/merge.js'
+import { getAgent, updateAgent } from '../state/agents.js'
+import { ensureIntegrationBranch, mergeWorktreeBranch, MergeConflictError } from '../../git/merge.js'
 import { removeWorktree } from '../../git/worktree.js'
 import { calculateCost } from '../cost.js'
+import { killTmuxWindow } from '../../spawner/tmux.js'
 
 export function handleGetMyTask(db: Database.Database, agentId: string): Task {
   const task = db.prepare(
@@ -51,25 +53,54 @@ export async function handleReportDone(
       ? (db.prepare('SELECT p.cwd FROM projects p JOIN runs r ON r.project_id = p.id WHERE r.id = ?').get(task.run_id) as { cwd: string } | undefined)?.cwd
       : undefined)
     if (projectCwd) {
+      // Detect zero-commit branch: compare current HEAD to the SHA at worktree creation
+      if (task.head_sha) {
+        try {
+          const git = simpleGit(projectCwd)
+          const currentSha = (await git.revparse([task.branch])).trim()
+          if (currentSha === task.head_sha) {
+            const reason = 'task branch has no commits'
+            db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+              taskId, 'error', `Empty branch: ${task.branch} has no commits since creation (head_sha=${task.head_sha})`
+            )
+            await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch })
+              .catch(() => {})
+            updateTask(db, taskId, { status: 'failed', failure_reason: reason })
+            if (task.agent_id) {
+              updateAgent(db, task.agent_id, { status: 'done' })
+              const agent = getAgent(db, task.agent_id)
+              if (agent?.tmux_pane) killTmuxWindow(agent.tmux_pane)
+            }
+            return
+          }
+        } catch {
+          // If rev-parse fails (branch gone?), fall through to normal merge which will surface the real error
+        }
+      }
       try {
         const runId = task.run_id ?? undefined
         await ensureIntegrationBranch(projectCwd, runId)
-        await mergeWorktreeBranch(projectCwd, task.branch, runId)
+        await mergeWorktreeBranch(projectCwd, task.branch, runId, task.worktree_path)
         const integBranch = runId ? `mc/run-${runId}` : 'mc/integration'
         db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
           taskId, 'info', `Merged and pushed ${task.branch} to origin/${integBranch}`
         )
-        await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch, taskId })
+        await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
+        const failureReason = err instanceof MergeConflictError ? 'merge conflict' : 'merge failed'
         db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
-          taskId, 'error', `Merge conflict: ${task.branch} could not be merged into mc/integration — ${msg}`
+          taskId, 'error', `Merge failed: ${task.branch} could not be merged — ${msg}`
         )
         // Clean up the worktree so retries can recreate it with the same branch name
-        await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch, taskId })
+        await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch })
           .catch(() => {}) // best-effort; don't mask the original merge error
-        updateTask(db, taskId, { status: 'failed' })
-        if (task.agent_id) updateAgent(db, task.agent_id, { status: 'done' })
+        updateTask(db, taskId, { status: 'failed', failure_reason: failureReason })
+        if (task.agent_id) {
+          updateAgent(db, task.agent_id, { status: 'done' })
+          const agent = getAgent(db, task.agent_id)
+          if (agent?.tmux_pane) killTmuxWindow(agent.tmux_pane)
+        }
         return
       }
     }
@@ -88,6 +119,9 @@ export async function handleReportDone(
   // Mark the agent done so the spawner watcher's exit handler doesn't flag it as failed
   if (task?.agent_id) {
     updateAgent(db, task.agent_id, { status: 'done' })
+    // Reap the tmux window now that the task is complete
+    const agent = getAgent(db, task.agent_id)
+    if (agent?.tmux_pane) killTmuxWindow(agent.tmux_pane)
   }
 }
 

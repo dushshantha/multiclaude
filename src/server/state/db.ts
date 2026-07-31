@@ -33,6 +33,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
       max_retries INTEGER NOT NULL DEFAULT 3,
       worktree_path TEXT,
       branch TEXT,
+      head_sha TEXT,
       agent_id TEXT,
       started_at TEXT,
       duration_seconds REAL,
@@ -43,6 +44,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
       cost_usd REAL,
       run_id TEXT REFERENCES runs(id),
       ticket TEXT,
+      failure_reason TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -87,6 +89,8 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
   try { db.exec("ALTER TABLE tasks ADD COLUMN ticket TEXT") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE runs ADD COLUMN budget_usd REAL") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN ticket TEXT") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN head_sha TEXT") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN failure_reason TEXT") } catch { /* already exists */ }
   return db
 }
 

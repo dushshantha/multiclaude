@@ -83,7 +83,7 @@ plan_dag({
   tasks: [
     { id: "rename-fields", title: "Rename DB columns to camelCase", ticket: "#42", model: "haiku" },
     { id: "implement-auth", title: "Implement OAuth2 login flow", ticket: "#42", model: "sonnet", effort: "high" },
-    { id: "design-schema", title: "Design multi-tenant data model", ticket: "#45", model: "opus", effort: "extra", dependsOn: [] },
+    { id: "design-schema", title: "Design multi-tenant data model", ticket: "#45", model: "opus", effort: "xhigh", dependsOn: [] },
     { id: "update-schema-docs", title: "Update docs for new schema", ticket: "#45", model: "haiku", dependsOn: ["design-schema"] }
   ],
   cwd: "/path/to/project",
@@ -158,8 +158,19 @@ When all tasks in a run are done, workers will have assembled the run integratio
      - **task-id-1**: summary from report_done
      - **task-id-2**: summary from report_done
      ```
-2. Share the PR URL with the user.
-3. **Do not merge** — the user must approve the PR before merging to main.
+
+2. **Closing keywords (CRITICAL):** Append a closing line that automatically closes all referenced issues upon merge. Assemble this mechanically from the distinct `ticket` values on the run's tasks:
+   - Collect all unique issue numbers from task `ticket` fields (e.g. if tasks have `ticket: "#42"`, `"#45"`, `"#42"`, collect `["#42", "#45"]`)
+   - Build the line as: `Closes #42, closes #45` (one `closes` keyword per issue)
+   - **⚠️ The trap:** `Closes #42, #45` closes only #42 — GitHub interprets the comma-separated list as a single reference. You must repeat `closes` for each issue.
+   - **Also note:** Issue numbers in the PR title do NOT close anything — only keywords in the body work.
+   - Append the closing line to the PR body at the end, on its own line(s)
+
+3. After the PR merges, verify that each referenced issue actually closed. If any remain open, the closing keywords may not have been applied correctly — escalate to the user.
+
+4. Share the PR URL with the user.
+
+5. **Do not merge** — the user must approve the PR before merging to main.
 
 ---
 
@@ -186,7 +197,7 @@ When planning tasks, assign the appropriate reasoning effort based on complexity
 | low | low | Mechanical tasks: reformatting files, renaming symbols, writing boilerplate, adding type annotations, updating config files, moving files, generating fixtures/mocks |
 | medium | medium | Standard mechanical work that requires some analysis: reviewing code patterns, understanding constraints, making decisions between obvious options |
 | high | high | Standard development: implementing features, writing tests, fixing bugs, refactoring, code review **(DEFAULT)** |
-| extra | extra | Complex work: ambitious features, novel algorithms, performance optimization, tricky refactors where mistakes are costly |
+| xhigh | xhigh | Complex work: ambitious features, novel algorithms, performance optimization, tricky refactors where mistakes are costly |
 | max | max | Highest-stakes complexity: architecture decisions, security-critical code, legal/compliance-critical work, tasks where errors are very expensive to undo |
 
 Effort is set independently of `model` — a complex task might use `model: "haiku"` (simple implementation) with `effort: "high"` (complex reasoning), or `model: "opus"` (most capable) with `effort: "low"` (mechanical work).
@@ -202,7 +213,7 @@ When a task has no explicit `effort`, infer one from its title and description:
 | Purely mechanical: rename, reformat, move/rename files, regenerate fixtures/mocks, bump versions, update config, add type annotations, copy boilerplate | **low** |
 | Mechanical but needs light reading: doc updates requiring code inspection, wiring a pre-designed change across a few files, simple choices between obvious options | **medium** |
 | Standard development: implement a feature, write tests, fix a bug, refactor, code review — or whenever signals are mixed or unclear | **high** *(default)* |
-| Complex/ambitious: novel algorithms, non-trivial performance optimization, tricky refactors with wide blast radius, cross-cutting changes | **extra** |
+| Complex/ambitious: novel algorithms, non-trivial performance optimization, tricky refactors with wide blast radius, cross-cutting changes | **xhigh** |
 | Highest-stakes: architecture or data-model design, security-critical or auth/crypto code, concurrency/locking, migrations, anything where mistakes are very expensive to undo | **max** |
 
 **Rule:** an explicit `effort` on a task always overrides this heuristic — the table above only applies when `effort` is absent.
@@ -214,7 +225,7 @@ Effort and model are independent — infer them separately. A few examples:
 | "Rename `user_id` → `userId` in all DB columns" | low | haiku | Pure mechanical rename |
 | "Update README to document the new `effort` field" | medium | haiku | Doc update that requires reading code |
 | "Implement rate limiting on /api/chat" | high | sonnet | Standard feature work **(default)** |
-| "Refactor auth to support multi-tenant token scopes" | extra | sonnet | Wide blast radius, non-trivial design |
+| "Refactor auth to support multi-tenant token scopes" | xhigh | sonnet | Wide blast radius, non-trivial design |
 | "Design migration strategy for splitting the users table" | max | opus | Architecture decision, hard to undo |
 
 ---

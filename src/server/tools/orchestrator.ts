@@ -2,11 +2,27 @@ import path from 'path'
 import { simpleGit } from 'simple-git'
 import type Database from 'better-sqlite3'
 import { createTask, listTasks, getTask, updateTask } from '../state/tasks.js'
+import type { Task } from '../state/tasks.js'
 import { addEdge, getReadyTasks, getBlockers } from '../state/dag.js'
-import { listAgents, registerAgent, updateAgent } from '../state/agents.js'
+import { getAgent, listAgents, registerAgent, updateAgent } from '../state/agents.js'
 import { upsertProject, listProjects } from '../state/projects.js'
 import { createRun, getRun, listRunsWithStats, RunWithStats } from '../state/runs.js'
 import { createWorktree } from '../../git/worktree.js'
+import { killTmuxWindow } from '../../spawner/tmux.js'
+
+export const VALID_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+export type EffortValue = typeof VALID_EFFORT_VALUES[number]
+
+/**
+ * Normalise an effort string to a canonical EffortValue.
+ * Returns the canonical value, or null when the input is invalid.
+ * "extra" is accepted as a legacy alias for "xhigh".
+ */
+export function normalizeEffort(effort: string): EffortValue | null {
+  if (effort === 'extra') return 'xhigh'
+  if ((VALID_EFFORT_VALUES as readonly string[]).includes(effort)) return effort as EffortValue
+  return null
+}
 
 export interface EpicTask {
   id: string
@@ -42,7 +58,17 @@ export function handlePlanDag(
     run_id = run.id
   }
   for (const t of epic.tasks) {
-    createTask(db, { id: t.id, title: t.title, description: t.description, model: t.model, effort: t.effort, run_id, ticket: t.ticket })
+    let effort: string | undefined = t.effort
+    if (effort !== undefined) {
+      const normalized = normalizeEffort(effort)
+      if (normalized === null) {
+        return {
+          error: `Invalid effort "${effort}" for task "${t.id}". Valid values: ${VALID_EFFORT_VALUES.join(', ')}. ("extra" is accepted as an alias for "xhigh")`,
+        }
+      }
+      effort = normalized
+    }
+    createTask(db, { id: t.id, title: t.title, description: t.description, model: t.model, effort, run_id, ticket: t.ticket })
   }
   for (const t of epic.tasks) {
     for (const dep of t.dependsOn) {
@@ -98,12 +124,32 @@ function buildDagVisualization(epic: Epic): string {
   return lines.join('\n').trimEnd()
 }
 
+/** Task augmented with last_log_at so callers can distinguish working from merely registered. */
+export type TaskWithActivity = Task & {
+  /** ISO timestamp of the most recent log entry for this task, or null if no logs yet. */
+  last_log_at: string | null
+}
+
 export interface SystemStatus {
-  tasks: ReturnType<typeof listTasks>
+  tasks: TaskWithActivity[]
   agents: ReturnType<typeof listAgents>
   readyTasks: ReturnType<typeof getReadyTasks>
-  retriableTasks: ReturnType<typeof listTasks>
+  retriableTasks: TaskWithActivity[]
   runs: ReturnType<typeof listRunsWithStats>
+}
+
+/**
+ * Enriches tasks with last_log_at from the logs table.
+ * A null last_log_at means the agent has produced no log entries yet — it is
+ * "merely registered" (spawning) rather than actively working.
+ */
+export function enrichWithLastLog(db: Database.Database, tasks: ReturnType<typeof listTasks>): TaskWithActivity[] {
+  return tasks.map(task => {
+    const row = db.prepare(
+      'SELECT MAX(created_at) AS last_log FROM logs WHERE task_id = ?'
+    ).get(task.id) as { last_log: string | null }
+    return { ...task, last_log_at: row.last_log }
+  })
 }
 
 export function handleGetSystemStatus(db: Database.Database, includeDone = false): SystemStatus {
@@ -111,10 +157,10 @@ export function handleGetSystemStatus(db: Database.Database, includeDone = false
   const tasks = includeDone ? allTasks : allTasks.filter(t => t.status !== 'done' && t.status !== 'failed' && t.status !== 'cancelled')
   const retriableTasks = allTasks.filter(t => t.status === 'failed' && t.retry_count < t.max_retries)
   return {
-    tasks,
+    tasks: enrichWithLastLog(db, tasks),
     agents: listAgents(db),
     readyTasks: getReadyTasks(db),
-    retriableTasks,
+    retriableTasks: enrichWithLastLog(db, retriableTasks),
     runs: listRunsWithStats(db),
   }
 }
@@ -145,6 +191,12 @@ export function handleCancelTask(db: Database.Database, taskId: string): void {
   db.prepare(
     "UPDATE tasks SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?"
   ).run(taskId)
+  // Reap the tmux window if one exists for this task's agent
+  const task = getTask(db, taskId)
+  if (task?.agent_id) {
+    const agent = getAgent(db, task.agent_id)
+    if (agent?.tmux_pane) killTmuxWindow(agent.tmux_pane)
+  }
 }
 
 export function handleCompleteTask(
@@ -210,7 +262,7 @@ export async function handleSpawnWorker(
         }
       }
       const info = await createWorktree(opts.cwd, taskId, undefined, baseBranch)
-      updateTask(db, taskId, { worktree_path: info.path, branch: info.branch, repo_path: opts.cwd })
+      updateTask(db, taskId, { worktree_path: info.path, branch: info.branch, head_sha: info.headSha, repo_path: opts.cwd })
       agentCwd = info.path
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)

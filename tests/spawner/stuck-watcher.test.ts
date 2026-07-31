@@ -284,4 +284,54 @@ describe('checkStuckWorkers', () => {
 
     expect(captureCallCount.n).toBe(0) // no capture attempted
   })
+
+  // --- window reaping on timeout ---
+
+  it('kills the tmux window when a task times out', () => {
+    db.prepare(
+      "INSERT INTO logs (task_id, level, message, created_at) VALUES ('t1', 'info', 'old', ?)"
+    ).run(minutesAgo(TIMEOUT_MINUTES + 1))
+    db.prepare("UPDATE agents SET tmux_pane = '@42' WHERE id = 'a1'").run()
+
+    const killed: string[] = []
+    const mockKill = (windowId: string) => { killed.push(windowId) }
+
+    const stuckSince = new Map<string, number>()
+    const mockCapture = (_target: string, _lines: number) => 'idle'
+    checkStuckWorkers(db, stuckSince, WARNING_MINUTES, TIMEOUT_MINUTES, Date.now(), mockCapture, mockKill)
+
+    expect(killed).toHaveLength(1)
+    expect(killed[0]).toBe('@42')
+  })
+
+  it('does not kill a window when the task only triggers a warning (not timeout)', () => {
+    db.prepare(
+      "INSERT INTO logs (task_id, level, message, created_at) VALUES ('t1', 'info', 'old', ?)"
+    ).run(minutesAgo(WARNING_MINUTES + 1))
+    db.prepare("UPDATE agents SET tmux_pane = '@42' WHERE id = 'a1'").run()
+
+    const killed: string[] = []
+    const mockKill = (windowId: string) => { killed.push(windowId) }
+
+    const stuckSince = new Map<string, number>()
+    const mockCapture = (_target: string, _lines: number) => 'idle'
+    checkStuckWorkers(db, stuckSince, WARNING_MINUTES, TIMEOUT_MINUTES, Date.now(), mockCapture, mockKill)
+
+    expect(killed).toHaveLength(0)
+  })
+
+  it('does not kill a window when the agent has no tmux_pane', () => {
+    db.prepare(
+      "INSERT INTO logs (task_id, level, message, created_at) VALUES ('t1', 'info', 'old', ?)"
+    ).run(minutesAgo(TIMEOUT_MINUTES + 1))
+    // agent has no tmux_pane (default NULL)
+
+    const killed: string[] = []
+    const mockKill = (windowId: string) => { killed.push(windowId) }
+
+    const stuckSince = new Map<string, number>()
+    checkStuckWorkers(db, stuckSince, WARNING_MINUTES, TIMEOUT_MINUTES, Date.now(), undefined, mockKill)
+
+    expect(killed).toHaveLength(0)
+  })
 })

@@ -1,13 +1,15 @@
 import { simpleGit } from 'simple-git'
-import { mkdtempSync } from 'fs'
+import { mkdtempSync, readFileSync } from 'fs'
 import { rm } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, isAbsolute, resolve } from 'path'
 
 export interface WorktreeInfo {
   path: string
   branch: string
   taskId: string
+  gitDir: string
+  headSha: string
 }
 
 const STOP_WORDS = new Set(['a', 'an', 'the', 'and', 'or', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'use', 'using'])
@@ -49,6 +51,17 @@ export function branchNameFromTitle(title: string, taskId?: string): string {
   return `${prefix}/${slug}`
 }
 
+export function readWorktreeGitDir(worktreePath: string): string {
+  const dotGitPath = join(worktreePath, '.git')
+  const content = readFileSync(dotGitPath, 'utf8').trim()
+  const match = content.match(/^gitdir:\s*(.+)$/m)
+  if (!match) {
+    throw new Error(`${dotGitPath} does not contain a valid gitdir reference`)
+  }
+  const gitDir = match[1].trim()
+  return isAbsolute(gitDir) ? gitDir : resolve(worktreePath, gitDir)
+}
+
 export async function createWorktree(repoPath: string, taskId: string, taskTitle?: string, baseBranch?: string): Promise<WorktreeInfo> {
   const branch = taskTitle ? branchNameFromTitle(taskTitle, taskId) : `mc/${taskId}`
   const worktreePath = mkdtempSync(join(tmpdir(), `mc-${taskId}-`))
@@ -68,7 +81,12 @@ export async function createWorktree(repoPath: string, taskId: string, taskTitle
   } else {
     await git.raw(['worktree', 'add', '-b', branch, worktreePath])
   }
-  return { path: worktreePath, branch, taskId }
+
+  const gitDir = readWorktreeGitDir(worktreePath)
+  const worktreeGit = simpleGit(worktreePath)
+  const headSha = (await worktreeGit.revparse(['HEAD'])).trim()
+
+  return { path: worktreePath, branch, taskId, gitDir, headSha }
 }
 
 function parseWorktreePathForBranch(porcelainOutput: string, branch: string): string | null {
@@ -82,7 +100,7 @@ function parseWorktreePathForBranch(porcelainOutput: string, branch: string): st
   return null
 }
 
-export async function removeWorktree(repoPath: string, info: WorktreeInfo): Promise<void> {
+export async function removeWorktree(repoPath: string, info: Pick<WorktreeInfo, 'path' | 'branch'>): Promise<void> {
   const git = simpleGit(repoPath)
   // Silently ignore errors when the worktree is already gone (idempotent)
   await git.raw(['worktree', 'remove', '--force', info.path]).catch(() => {})
