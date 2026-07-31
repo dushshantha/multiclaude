@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { simpleGit } from 'simple-git'
 import { getTask, updateTask } from '../state/tasks.js'
 import type { Task } from '../state/tasks.js'
 import { getAgent, updateAgent } from '../state/agents.js'
@@ -52,6 +53,30 @@ export async function handleReportDone(
       ? (db.prepare('SELECT p.cwd FROM projects p JOIN runs r ON r.project_id = p.id WHERE r.id = ?').get(task.run_id) as { cwd: string } | undefined)?.cwd
       : undefined)
     if (projectCwd) {
+      // Detect zero-commit branch: compare current HEAD to the SHA at worktree creation
+      if (task.head_sha) {
+        try {
+          const git = simpleGit(projectCwd)
+          const currentSha = (await git.revparse([task.branch])).trim()
+          if (currentSha === task.head_sha) {
+            const reason = 'task branch has no commits'
+            db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+              taskId, 'error', `Empty branch: ${task.branch} has no commits since creation (head_sha=${task.head_sha})`
+            )
+            await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch })
+              .catch(() => {})
+            updateTask(db, taskId, { status: 'failed', failure_reason: reason })
+            if (task.agent_id) {
+              updateAgent(db, task.agent_id, { status: 'done' })
+              const agent = getAgent(db, task.agent_id)
+              if (agent?.tmux_pane) killTmuxWindow(agent.tmux_pane)
+            }
+            return
+          }
+        } catch {
+          // If rev-parse fails (branch gone?), fall through to normal merge which will surface the real error
+        }
+      }
       try {
         const runId = task.run_id ?? undefined
         await ensureIntegrationBranch(projectCwd, runId)
