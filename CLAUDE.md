@@ -294,8 +294,19 @@ When all tasks in a run are done, workers will have assembled the run integratio
      - **task-id-1**: summary from report_done
      - **task-id-2**: summary from report_done
      ```
-2. Share the PR URL with the user.
-3. **Do not merge** — the user must approve the PR before merging to main.
+
+2. **Closing keywords (CRITICAL):** Append a closing line that automatically closes all referenced issues upon merge. Assemble this mechanically from the distinct `ticket` values on the run's tasks:
+   - Collect all unique issue numbers from task `ticket` fields (e.g. if tasks have `ticket: "#42"`, `"#45"`, `"#42"`, collect `["#42", "#45"]`)
+   - Build the line as: `Closes #42, closes #45` (one `closes` keyword per issue)
+   - **⚠️ The trap:** `Closes #42, #45` closes only #42 — GitHub interprets the comma-separated list as a single reference. You must repeat `closes` for each issue.
+   - **Also note:** Issue numbers in the PR title do NOT close anything — only keywords in the body work.
+   - Append the closing line to the PR body at the end, on its own line(s)
+
+3. After the PR merges, verify that each referenced issue actually closed. If any remain open, the closing keywords may not have been applied correctly — escalate to the user.
+
+4. Share the PR URL with the user.
+
+5. **Do not merge** — the user must approve the PR before merging to main.
 
 ---
 
