@@ -26,6 +26,26 @@ interface AgentRow {
   status: string
 }
 
+/**
+ * Scans a worker log file for non-JSON lines, which are CLI stderr output
+ * (warnings, errors from the claude binary itself rather than Claude's responses).
+ * These surface issues like unrecognised flags so they appear in the task log
+ * without requiring the user to open the log file or tmux pane.
+ */
+function parseCliWarnings(logPath: string): string[] {
+  try {
+    const lines = readFileSync(logPath, 'utf8').split('\n')
+    const result: string[] = []
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try { JSON.parse(trimmed); continue } catch { /* not JSON — likely CLI stderr */ }
+      result.push(trimmed)
+    }
+    return result
+  } catch { return [] }
+}
+
 function parseTokensFromLog(logPath: string): { input_tokens?: number; output_tokens?: number; total_tokens?: number } {
   try {
     const lines = readFileSync(logPath, 'utf8').trim().split('\n').reverse()
@@ -180,9 +200,18 @@ function startSpawnerWatcher(
           }
         }
         if (agent.task_id) {
-          const tokens = parseTokensFromLog(workerLogPath(agent.id))
+          const logPath = workerLogPath(agent.id)
+          const tokens = parseTokensFromLog(logPath)
           if (tokens.total_tokens !== undefined) {
             updateTask(db, agent.task_id, tokens)
+          }
+          // Surface any CLI stderr warnings (non-JSON lines) to the task log
+          // so issues like invalid flags are visible without reading the log file.
+          const warnings = parseCliWarnings(logPath)
+          for (const warning of warnings) {
+            db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+              agent.task_id, 'warn', `[claude-cli] ${warning}`
+            )
           }
         }
       })

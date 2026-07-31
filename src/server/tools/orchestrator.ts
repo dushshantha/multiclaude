@@ -8,6 +8,20 @@ import { upsertProject, listProjects } from '../state/projects.js'
 import { createRun, getRun, listRunsWithStats, RunWithStats } from '../state/runs.js'
 import { createWorktree } from '../../git/worktree.js'
 
+export const VALID_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+export type EffortValue = typeof VALID_EFFORT_VALUES[number]
+
+/**
+ * Normalise an effort string to a canonical EffortValue.
+ * Returns the canonical value, or null when the input is invalid.
+ * "extra" is accepted as a legacy alias for "xhigh".
+ */
+export function normalizeEffort(effort: string): EffortValue | null {
+  if (effort === 'extra') return 'xhigh'
+  if ((VALID_EFFORT_VALUES as readonly string[]).includes(effort)) return effort as EffortValue
+  return null
+}
+
 export interface EpicTask {
   id: string
   title: string
@@ -42,7 +56,17 @@ export function handlePlanDag(
     run_id = run.id
   }
   for (const t of epic.tasks) {
-    createTask(db, { id: t.id, title: t.title, description: t.description, model: t.model, effort: t.effort, run_id, ticket: t.ticket })
+    let effort: string | undefined = t.effort
+    if (effort !== undefined) {
+      const normalized = normalizeEffort(effort)
+      if (normalized === null) {
+        return {
+          error: `Invalid effort "${effort}" for task "${t.id}". Valid values: ${VALID_EFFORT_VALUES.join(', ')}. ("extra" is accepted as an alias for "xhigh")`,
+        }
+      }
+      effort = normalized
+    }
+    createTask(db, { id: t.id, title: t.title, description: t.description, model: t.model, effort, run_id, ticket: t.ticket })
   }
   for (const t of epic.tasks) {
     for (const dep of t.dependsOn) {
