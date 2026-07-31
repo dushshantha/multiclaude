@@ -98,6 +98,7 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
   try { db.exec("ALTER TABLE agents ADD COLUMN failure_reason TEXT") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE agents ADD COLUMN failure_detail TEXT") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN recovery_attempts INTEGER NOT NULL DEFAULT 0") } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE tasks ADD COLUMN merged_into_run INTEGER") } catch { /* already exists */ }
   return db
 }
 

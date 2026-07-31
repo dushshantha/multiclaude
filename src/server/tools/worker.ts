@@ -47,6 +47,9 @@ export async function handleReportDone(
     ? calculateCost(opts.input_tokens, opts.output_tokens, model)
     : undefined
 
+  // Tracks whether task branch landed on the run integration branch. null = no merge attempted.
+  let mergedIntoRun: boolean | null = null
+
   // Merge worktree branch into mc/integration and remove worktree if one was created
   if (task?.worktree_path && task.branch) {
     const projectCwd = task.repo_path ?? (task.run_id
@@ -86,6 +89,7 @@ export async function handleReportDone(
       try {
         await ensureIntegrationBranch(projectCwd, runId)
         await mergeWorktreeBranch(projectCwd, task.branch, runId, task.worktree_path)
+        mergedIntoRun = true
         db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
           taskId, 'info', `Merged and pushed ${task.branch} to origin/${integBranch}`
         )
@@ -99,6 +103,8 @@ export async function handleReportDone(
         try {
           landed = await isMergedInto(projectCwd, task.branch, integBranch)
         } catch { /* conservative: assume not landed */ }
+
+        mergedIntoRun = landed
 
         if (landed) {
           // Merge landed; error came from post-merge code inside mergeWorktreeBranch.
@@ -143,6 +149,7 @@ export async function handleReportDone(
     output_tokens: opts.output_tokens,
     total_tokens: opts.total_tokens,
     cost_usd,
+    ...(mergedIntoRun !== null && { merged_into_run: mergedIntoRun }),
   })
   db.prepare(
     'INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)'
