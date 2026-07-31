@@ -283,21 +283,17 @@ describe('spawnTmuxWorker', () => {
     mcpConfigPath: '/tmp/mcp.json',
   }
 
-  // Helper: sets up the standard 6-call mock sequence (not-in-tmux path)
+  // Helper: sets up the standard 4-call mock sequence (not-in-tmux path)
   // 1. has-session (ensureTmuxSession)
-  // 2. list-windows (reapStaleWindows → listTmuxWindows → returns empty)
-  // 3. new-window -P -F #{window_id} (createTmuxWindow → returns windowId)
-  // 4. display-message '' (windowExists → succeeds)
-  // 5. display-message pane_pid (getTmuxPanePid)
-  // 6. send-keys (sendTmuxKeys)
+  // 2. new-window -P -F #{window_id} (createTmuxWindow → returns windowId)
+  // 3. display-message pane_pid (getTmuxPanePid)
+  // 4. send-keys (sendTmuxKeys)
   function setupDefaultMocks({ windowId = '@42', pid = '9999\n' } = {}) {
     mockExecSync.mockReset()
-    mockExecSync.mockReturnValueOnce(undefined)       // has-session succeeds
-    mockExecSync.mockReturnValueOnce('')              // list-windows (reapStaleWindows) → empty
+    mockExecSync.mockReturnValueOnce(undefined)     // has-session succeeds
     mockExecSync.mockReturnValueOnce(`${windowId}\n`) // new-window returns @NN
-    mockExecSync.mockReturnValueOnce(undefined)       // windowExists succeeds
-    mockExecSync.mockReturnValueOnce(pid)             // pane PID
-    mockExecSync.mockReturnValueOnce(undefined)       // send-keys
+    mockExecSync.mockReturnValueOnce(pid)            // pane PID
+    mockExecSync.mockReturnValueOnce(undefined)      // send-keys
   }
 
   beforeEach(() => {
@@ -335,9 +331,7 @@ describe('spawnTmuxWorker', () => {
     for (const agentId of ['w-task-1', 'w-task-1-retry1', 'w-task-1-retry2']) {
       mockExecSync.mockReset()
       mockExecSync.mockReturnValueOnce(undefined)    // has-session
-      mockExecSync.mockReturnValueOnce('')           // list-windows (reapStaleWindows)
-      mockExecSync.mockReturnValueOnce('@99\n')      // new-window
-      mockExecSync.mockReturnValueOnce(undefined)    // windowExists
+      mockExecSync.mockReturnValueOnce('@99\n')       // new-window
       mockExecSync.mockReturnValueOnce('1234\n')     // pane PID
       mockExecSync.mockReturnValueOnce(undefined)    // send-keys
       mockSpawn.mockReturnValue({ on: vi.fn(), unref: vi.fn() })
@@ -362,9 +356,7 @@ describe('spawnTmuxWorker', () => {
   it('pid is undefined when getTmuxPanePid fails', () => {
     mockExecSync.mockReset()
     mockExecSync.mockReturnValueOnce(undefined)                              // has-session
-    mockExecSync.mockReturnValueOnce('')                                     // list-windows (reapStaleWindows)
     mockExecSync.mockReturnValueOnce('@42\n')                                // new-window
-    mockExecSync.mockReturnValueOnce(undefined)                              // windowExists
     mockExecSync.mockImplementationOnce(() => { throw new Error('nopid') }) // pane PID fails
     mockExecSync.mockReturnValueOnce(undefined)                              // send-keys
 

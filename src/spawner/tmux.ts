@@ -430,7 +430,7 @@ export function spawnTmuxWorker(cfg: SpawnConfig): WorkerHandle {
   // Verify the window actually exists; tmux can return a non-zero exit without throwing
   // in some edge cases, leaving us with a stale @NN that targets nothing.
   if (!windowExists(windowId)) {
-    throw new Error(`tmux window creation failed: ${windowId} ('${windowName}') does not exist after new-window`)
+    throw new Error(`tmux_window_create_failed: ${windowId} ('${windowName}') does not exist after new-window`)
   }
 
   // All targeting after this point uses the @NN window ID, not the name.
