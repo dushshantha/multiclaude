@@ -32,6 +32,14 @@ function git(repoPath: string): ReturnType<typeof simpleGit> {
   return simpleGit(repoPath).env(env)
 }
 
+export async function checkIsGitRepo(repoPath: string): Promise<boolean> {
+  try {
+    return await git(repoPath).checkIsRepo()
+  } catch {
+    return false
+  }
+}
+
 export async function hasRemote(repoPath: string): Promise<boolean> {
   // Use --local to avoid picking up a global [remote "origin"] from ~/.gitconfig
   try {
