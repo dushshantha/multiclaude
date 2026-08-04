@@ -28,6 +28,8 @@ export interface Task {
   failure_detail: string | null
   recovery_attempts: number
   merged_into_run: boolean | null
+  conflicted_files: string[] | null
+  conflict_branch: string | null
   created_at: string
   updated_at: string
 }
@@ -61,12 +63,19 @@ export interface UpdateTaskInput {
   failure_detail?: string
   recovery_attempts?: number
   merged_into_run?: boolean
+  conflicted_files?: string[] | null
+  conflict_branch?: string | null
 }
 
 function mapTask(row: Record<string, unknown>): Task {
+  let conflicted_files: string[] | null = null
+  if (row.conflicted_files != null) {
+    try { conflicted_files = JSON.parse(row.conflicted_files as string) } catch { conflicted_files = [] }
+  }
   return {
     ...(row as any),
     merged_into_run: row.merged_into_run == null ? null : Boolean(row.merged_into_run),
+    conflicted_files,
   }
 }
 
@@ -112,6 +121,8 @@ export function updateTask(db: Database.Database, id: string, input: UpdateTaskI
   if (input.failure_detail !== undefined) { sets.push('failure_detail = @failure_detail'); params.failure_detail = input.failure_detail }
   if (input.recovery_attempts !== undefined) { sets.push('recovery_attempts = @recovery_attempts'); params.recovery_attempts = input.recovery_attempts }
   if (input.merged_into_run !== undefined) { sets.push('merged_into_run = @merged_into_run'); params.merged_into_run = input.merged_into_run ? 1 : 0 }
+  if (input.conflicted_files !== undefined) { sets.push('conflicted_files = @conflicted_files'); params.conflicted_files = input.conflicted_files === null ? null : JSON.stringify(input.conflicted_files) }
+  if (input.conflict_branch !== undefined) { sets.push('conflict_branch = @conflict_branch'); params.conflict_branch = input.conflict_branch ?? null }
 
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = @id`).run(params as any)
 }
