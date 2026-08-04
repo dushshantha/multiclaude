@@ -165,6 +165,40 @@ export async function handleReportDone(
             taskId, 'warn', `post_merge_cleanup_failed: ${msg}`
           )
         })
+
+      // If this is a conflict-resolution worker, propagate completion to the original task.
+      // Verify the original task branch landed in the integration branch (the conflict-resolution
+      // merge commit has the original branch as a parent, so isMergedInto returns true).
+      if (mergedIntoRun && task.conflict_worker_for) {
+        const originalTask = getTask(db, task.conflict_worker_for)
+        if (originalTask?.branch && originalTask.failure_reason === 'merge_conflict') {
+          const integBranch = runId ? `mc/run-${runId}` : 'mc/integration'
+          let originalMerged = false
+          try {
+            originalMerged = await isMergedInto(projectCwd, originalTask.branch, integBranch)
+          } catch { /* conservative: log warning below */ }
+
+          if (originalMerged) {
+            updateTask(db, task.conflict_worker_for, {
+              status: 'done',
+              merged_into_run: true,
+              conflicted_files: null,
+              conflict_branch: null,
+              failure_reason: null,
+              failure_detail: null,
+            })
+            db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+              task.conflict_worker_for, 'info',
+              `DONE: Conflict resolved by worker ${taskId}; branch ${originalTask.branch} merged into ${integBranch}`
+            )
+          } else {
+            db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+              task.conflict_worker_for, 'warn',
+              `Conflict worker ${taskId} merged, but ${originalTask.branch} is not yet in ${integBranch} — manual inspection required`
+            )
+          }
+        }
+      }
     }
   }
   updateTask(db, taskId, {

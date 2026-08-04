@@ -77,7 +77,7 @@ describe('merged_into_run persistence', () => {
   beforeEach(() => {
     db = createDb(':memory:')
     mockEnsureIntegrationBranch.mockReset().mockResolvedValue(undefined)
-    mockMergeWorktreeBranch.mockReset().mockResolvedValue(undefined)
+    mockMergeWorktreeBranch.mockReset().mockResolvedValue({ push: { ok: true, remoteBranch: 'origin/mc/integration' } })
     mockIsMergedInto.mockReset().mockResolvedValue(false)
     mockRemoveWorktree.mockReset().mockResolvedValue(undefined)
     mockKillTmuxWindow.mockReset()
@@ -87,7 +87,7 @@ describe('merged_into_run persistence', () => {
 
   it('merged_into_run is true when merge succeeds', async () => {
     setupTaskWithWorktree(db)
-    mockMergeWorktreeBranch.mockResolvedValue(undefined)
+    mockMergeWorktreeBranch.mockResolvedValue({ push: { ok: true, remoteBranch: 'origin/mc/integration' } })
 
     await handleReportDone(db, 't1', 'feature done')
 
@@ -133,7 +133,7 @@ describe('merged_into_run persistence', () => {
 
   it('merged_into_run is true even when removeWorktree throws after successful merge', async () => {
     setupTaskWithWorktree(db)
-    mockMergeWorktreeBranch.mockResolvedValue(undefined)
+    mockMergeWorktreeBranch.mockResolvedValue({ push: { ok: true, remoteBranch: 'origin/mc/integration' } })
     mockRemoveWorktree.mockRejectedValue(new Error('worktree already removed'))
 
     await handleReportDone(db, 't1', 'done')

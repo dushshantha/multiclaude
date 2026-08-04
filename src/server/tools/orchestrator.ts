@@ -7,7 +7,7 @@ import { addEdge, getReadyTasks, getBlockers } from '../state/dag.js'
 import { getAgent, listAgents, registerAgent, updateAgent } from '../state/agents.js'
 import { upsertProject, listProjects } from '../state/projects.js'
 import { createRun, getRun, listRunsWithStats, updateRun, RunWithStats } from '../state/runs.js'
-import { createWorktree, preflightReconcile, isProtectedBranch } from '../../git/worktree.js'
+import { createWorktree, preflightReconcile, isProtectedBranch, removeWorktree } from '../../git/worktree.js'
 import { killTmuxWindow, reapStaleWindows, ensureTmuxSession } from '../../spawner/tmux.js'
 import { hasRemote, getRemoteUrl, parseGitHubRemote, pushBranch, getBranchSyncState } from '../../git/ops.js'
 import type { PushResult } from '../../git/ops.js'
@@ -696,6 +696,8 @@ export interface ResolveResult {
   needsWorker?: boolean
   conflictedFiles?: string[]
   detail?: string
+  workerSpawned?: boolean
+  conflictTaskId?: string
 }
 
 export async function handleResolveMergeConflict(
@@ -775,10 +777,164 @@ export async function handleResolveMergeConflict(
       } catch (strategyErr: unknown) {
         const strategyMsg = strategyErr instanceof Error ? strategyErr.message : String(strategyErr)
         try { await g.raw(['merge', '--abort']) } catch { /* ignore */ }
-        return { ok: false, needsWorker: true, conflictedFiles: nonAutoResolvable, detail: `Strategy resolution failed: ${strategyMsg}` }
+        const spawnResult = await spawnConflictResolutionWorker(db, taskId)
+        return {
+          ok: false,
+          needsWorker: true,
+          conflictedFiles: nonAutoResolvable,
+          workerSpawned: spawnResult.ok,
+          conflictTaskId: spawnResult.ok ? spawnResult.conflictTaskId : undefined,
+          detail: `Strategy resolution failed: ${strategyMsg}${spawnResult.ok ? '' : `; worker spawn failed: ${spawnResult.detail}`}`,
+        }
       }
     }
 
-    return { ok: false, needsWorker: true, conflictedFiles: nonAutoResolvable }
+    const spawnResult = await spawnConflictResolutionWorker(db, taskId)
+    return {
+      ok: false,
+      needsWorker: true,
+      conflictedFiles: nonAutoResolvable,
+      workerSpawned: spawnResult.ok,
+      conflictTaskId: spawnResult.ok ? spawnResult.conflictTaskId : undefined,
+      detail: spawnResult.ok ? undefined : `Worker spawn failed: ${spawnResult.detail}`,
+    }
   }
+}
+
+function buildConflictWorkerDescription(task: Task, integBranch: string): string {
+  const files = task.conflicted_files ?? []
+  return [
+    `Resolve merge conflict between ${task.branch} and ${integBranch}.`,
+    '',
+    'Conflicted files:',
+    ...files.map(f => `- ${f}`),
+    '',
+    'The merge has already been started in your working directory.',
+    'You will see conflict markers (<<<<<<, =======, >>>>>>>) in the files above.',
+    '',
+    'For each conflicted file:',
+    '1. Understand what the task branch intended to change (the HEAD / top section)',
+    '2. Understand what the integration branch changed (the bottom section)',
+    '3. Preserve the intent of BOTH changes when possible',
+    '4. NEVER use --ours or --theirs on source files',
+    '5. Stage each resolved file with: git add <file>',
+    '',
+    'After resolving ALL conflicts:',
+    '1. Run the test suite to verify correctness',
+    '2. Commit the merge: git commit --no-edit',
+    '3. Call report_done with a summary of what you reconciled and how',
+    '',
+    `Original task: "${task.title}" (ID: ${task.id})`,
+    `Task branch: ${task.branch}`,
+    `Integration branch: ${integBranch}`,
+  ].join('\n')
+}
+
+export async function spawnConflictResolutionWorker(
+  db: Database.Database,
+  originalTaskId: string,
+): Promise<{ ok: true; conflictTaskId: string } | { ok: false; detail: string }> {
+  const task = getTask(db, originalTaskId)
+  if (!task) return { ok: false, detail: `Task '${originalTaskId}' not found` }
+  if (task.failure_reason !== 'merge_conflict') {
+    return { ok: false, detail: `Task '${originalTaskId}' is not in merge_conflict state (failure_reason: ${task.failure_reason ?? 'none'})` }
+  }
+  if (!task.branch || !task.repo_path) {
+    return { ok: false, detail: `Task '${originalTaskId}' missing branch or repo_path` }
+  }
+  if (!task.conflicted_files?.length) {
+    return { ok: false, detail: `Task '${originalTaskId}' has no conflicted_files recorded` }
+  }
+
+  const integBranch = task.run_id
+    ? RUN_INTEGRATION_BRANCH(task.run_id)
+    : (task.conflict_branch ?? 'mc/integration')
+
+  const conflictTaskId = `conflict-${originalTaskId}`
+
+  // Idempotency: if a live conflict worker already exists, return it
+  const existing = getTask(db, conflictTaskId)
+  if (existing) {
+    if (existing.status === 'in_progress' || existing.status === 'pending') {
+      return { ok: true, conflictTaskId }
+    }
+    if (existing.status === 'done') {
+      return { ok: false, detail: `Conflict worker '${conflictTaskId}' already completed` }
+    }
+    // 'failed' or 'cancelled' — do not re-create automatically; caller must recover explicitly
+    return { ok: false, detail: `Conflict worker '${conflictTaskId}' exists with status '${existing.status}' — recover or cancel it first` }
+  }
+
+  // 1. Create the conflict worker task
+  createTask(db, {
+    id: conflictTaskId,
+    title: `Resolve merge conflict: ${task.conflicted_files.join(', ')}`,
+    description: buildConflictWorkerDescription(task, integBranch),
+    model: task.model ?? 'sonnet',
+    effort: 'max',
+    run_id: task.run_id ?? undefined,
+    conflict_worker_for: originalTaskId,
+  })
+
+  // 2. Create a worktree based on the integration branch
+  let worktreeInfo: Awaited<ReturnType<typeof createWorktree>>
+  try {
+    worktreeInfo = await createWorktree(task.repo_path, conflictTaskId, undefined, integBranch)
+  } catch (err: unknown) {
+    const detail = err instanceof Error ? err.message : String(err)
+    updateTask(db, conflictTaskId, { status: 'failed', failure_reason: 'worktree_create_failed', failure_detail: detail })
+    return { ok: false, detail: `Failed to create conflict worker worktree: ${detail}` }
+  }
+
+  // 3. Set up the merge-in-progress state in the worktree.
+  // Run git merge to reproduce the conflict. simple-git throws on conflict;
+  // we catch and confirm conflicted files are present (expected state).
+  const wtGit = simpleGit(worktreeInfo.path)
+  try {
+    await wtGit.merge([task.branch, '--no-ff', '-m', `merge: ${task.branch} into ${integBranch} (conflict resolution)`])
+    // Merge succeeded without conflicts — no longer conflicting.
+    // The merge is committed; the worker just needs to report_done.
+  } catch {
+    // Expected: conflicts remain in the worktree for the worker to resolve.
+    // Verify the merge state was actually set up (in case of unexpected error).
+    const conflictedNow = (await wtGit.raw(['diff', '--name-only', '--diff-filter=U']).catch(() => '')).trim()
+    if (!conflictedNow) {
+      // No conflicts and merge failed — something unexpected happened
+      await removeWorktree(task.repo_path, { path: worktreeInfo.path, branch: worktreeInfo.branch }).catch(() => {})
+      updateTask(db, conflictTaskId, {
+        status: 'failed',
+        failure_reason: 'conflict_setup_failed',
+        failure_detail: 'git merge failed but no conflicted files found — unexpected state',
+      })
+      return { ok: false, detail: 'Failed to reproduce merge conflict state in worktree' }
+    }
+  }
+
+  // 4. Record worktree info on the conflict task
+  updateTask(db, conflictTaskId, {
+    worktree_path: worktreeInfo.path,
+    branch: worktreeInfo.branch,
+    head_sha: worktreeInfo.headSha,
+    repo_path: task.repo_path,
+  })
+
+  // 5. Register agent in 'spawning' status — the spawner watcher in cli.ts
+  //    picks this up and launches the subprocess through the normal backend seam.
+  const agentId = `w-${conflictTaskId}`
+  registerAgent(db, { id: agentId, task_id: conflictTaskId, cwd: worktreeInfo.path })
+  updateTask(db, conflictTaskId, {
+    status: 'in_progress',
+    agent_id: agentId,
+    started_at: new Date().toISOString(),
+  })
+
+  // 6. Note on original task that a resolution worker has been spawned
+  updateTask(db, originalTaskId, {
+    failure_detail: `${task.failure_detail ? task.failure_detail + '\n' : ''}Conflict resolution worker spawned: ${conflictTaskId}`,
+  })
+  db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+    originalTaskId, 'info', `Conflict resolution worker spawned: ${conflictTaskId} (branch: ${worktreeInfo.branch})`
+  )
+
+  return { ok: true, conflictTaskId }
 }

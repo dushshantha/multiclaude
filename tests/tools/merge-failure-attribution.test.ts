@@ -69,7 +69,7 @@ describe('handleReportDone — merge failure attribution', () => {
   beforeEach(() => {
     db = createDb(':memory:')
     mockEnsureIntegrationBranch.mockReset().mockResolvedValue(undefined)
-    mockMergeWorktreeBranch.mockReset().mockResolvedValue(undefined)
+    mockMergeWorktreeBranch.mockReset().mockResolvedValue({ push: { ok: true, remoteBranch: 'origin/mc/integration' } })
     mockIsMergedInto.mockReset().mockResolvedValue(false)
     mockRemoveWorktree.mockReset().mockResolvedValue(undefined)
     mockKillTmuxWindow.mockReset()

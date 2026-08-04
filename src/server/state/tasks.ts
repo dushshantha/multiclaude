@@ -30,6 +30,7 @@ export interface Task {
   merged_into_run: boolean | null
   conflicted_files: string[] | null
   conflict_branch: string | null
+  conflict_worker_for: string | null
   created_at: string
   updated_at: string
 }
@@ -43,6 +44,7 @@ export interface CreateTaskInput {
   max_retries?: number
   run_id?: string
   ticket?: string
+  conflict_worker_for?: string | null
 }
 
 export interface UpdateTaskInput {
@@ -59,12 +61,13 @@ export interface UpdateTaskInput {
   output_tokens?: number
   total_tokens?: number
   cost_usd?: number
-  failure_reason?: string
-  failure_detail?: string
+  failure_reason?: string | null
+  failure_detail?: string | null
   recovery_attempts?: number
   merged_into_run?: boolean
   conflicted_files?: string[] | null
   conflict_branch?: string | null
+  conflict_worker_for?: string | null
 }
 
 function mapTask(row: Record<string, unknown>): Task {
@@ -76,13 +79,14 @@ function mapTask(row: Record<string, unknown>): Task {
     ...(row as any),
     merged_into_run: row.merged_into_run == null ? null : Boolean(row.merged_into_run),
     conflicted_files,
+    conflict_worker_for: (row.conflict_worker_for as string | null) ?? null,
   }
 }
 
 export function createTask(db: Database.Database, input: CreateTaskInput): void {
   db.prepare(`
-    INSERT INTO tasks (id, title, description, model, effort, max_retries, run_id, ticket)
-    VALUES (@id, @title, @description, @model, @effort, @max_retries, @run_id, @ticket)
+    INSERT INTO tasks (id, title, description, model, effort, max_retries, run_id, ticket, conflict_worker_for)
+    VALUES (@id, @title, @description, @model, @effort, @max_retries, @run_id, @ticket, @conflict_worker_for)
   `).run({
     id: input.id,
     title: input.title,
@@ -92,6 +96,7 @@ export function createTask(db: Database.Database, input: CreateTaskInput): void 
     max_retries: input.max_retries ?? 3,
     run_id: input.run_id ?? null,
     ticket: input.ticket ?? null,
+    conflict_worker_for: input.conflict_worker_for ?? null,
   })
 }
 
@@ -117,12 +122,13 @@ export function updateTask(db: Database.Database, id: string, input: UpdateTaskI
   if (input.output_tokens !== undefined) { sets.push('output_tokens = @output_tokens'); params.output_tokens = input.output_tokens }
   if (input.total_tokens !== undefined) { sets.push('total_tokens = @total_tokens'); params.total_tokens = input.total_tokens }
   if (input.cost_usd !== undefined) { sets.push('cost_usd = @cost_usd'); params.cost_usd = input.cost_usd }
-  if (input.failure_reason !== undefined) { sets.push('failure_reason = @failure_reason'); params.failure_reason = input.failure_reason }
-  if (input.failure_detail !== undefined) { sets.push('failure_detail = @failure_detail'); params.failure_detail = input.failure_detail }
+  if (input.failure_reason !== undefined) { sets.push('failure_reason = @failure_reason'); params.failure_reason = input.failure_reason ?? null }
+  if (input.failure_detail !== undefined) { sets.push('failure_detail = @failure_detail'); params.failure_detail = input.failure_detail ?? null }
   if (input.recovery_attempts !== undefined) { sets.push('recovery_attempts = @recovery_attempts'); params.recovery_attempts = input.recovery_attempts }
   if (input.merged_into_run !== undefined) { sets.push('merged_into_run = @merged_into_run'); params.merged_into_run = input.merged_into_run ? 1 : 0 }
   if (input.conflicted_files !== undefined) { sets.push('conflicted_files = @conflicted_files'); params.conflicted_files = input.conflicted_files === null ? null : JSON.stringify(input.conflicted_files) }
   if (input.conflict_branch !== undefined) { sets.push('conflict_branch = @conflict_branch'); params.conflict_branch = input.conflict_branch ?? null }
+  if (input.conflict_worker_for !== undefined) { sets.push('conflict_worker_for = @conflict_worker_for'); params.conflict_worker_for = input.conflict_worker_for ?? null }
 
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = @id`).run(params as any)
 }
