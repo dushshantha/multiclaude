@@ -17,20 +17,35 @@ export function classifyPushFailure(stderr: string): PushFailureReason {
   return 'push_failed'
 }
 
+/**
+ * Create a simple-git instance that always operates on the repo at `repoPath`,
+ * ignoring any GIT_DIR / GIT_WORK_TREE / GIT_CEILING_DIRECTORIES that the
+ * parent process may have set (e.g. when running inside a git worktree).
+ */
+function git(repoPath: string): ReturnType<typeof simpleGit> {
+  const env: Record<string, string> = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined && k !== 'GIT_DIR' && k !== 'GIT_WORK_TREE' && k !== 'GIT_CEILING_DIRECTORIES') {
+      env[k] = v
+    }
+  }
+  return simpleGit(repoPath).env(env)
+}
+
 export async function hasRemote(repoPath: string): Promise<boolean> {
-  const git = simpleGit(repoPath)
+  // Use --local to avoid picking up a global [remote "origin"] from ~/.gitconfig
   try {
-    const remotes = await git.getRemotes()
-    return remotes.some(r => r.name === 'origin')
+    const url = (await git(repoPath).raw(['config', '--local', '--get', 'remote.origin.url'])).trim()
+    return url.length > 0
   } catch {
     return false
   }
 }
 
 export async function getRemoteUrl(repoPath: string): Promise<string | null> {
-  const git = simpleGit(repoPath)
+  // Use --local to avoid picking up a global [remote "origin"] from ~/.gitconfig
   try {
-    const url = (await git.remote(['get-url', 'origin']) as string).trim()
+    const url = (await git(repoPath).raw(['config', '--local', '--get', 'remote.origin.url'])).trim()
     return url || null
   } catch {
     return null
@@ -62,14 +77,14 @@ export async function pushBranch(repoPath: string, branch: string): Promise<Push
     return { ok: false, reason: 'no_remote', detail: 'No origin remote configured' }
   }
 
-  const git = simpleGit(repoPath)
+  const g = git(repoPath)
   try {
-    await git.push('origin', branch)
+    await g.push('origin', branch)
     return { ok: true, remoteBranch: `origin/${branch}` }
   } catch {
     // Plain push failed — try with --set-upstream (first push of a new branch)
     try {
-      await git.raw(['push', '--set-upstream', 'origin', branch])
+      await g.raw(['push', '--set-upstream', 'origin', branch])
       return { ok: true, remoteBranch: `origin/${branch}` }
     } catch (err2) {
       const detail = err2 instanceof Error ? err2.message : String(err2)
@@ -86,11 +101,11 @@ export async function getBranchSyncState(
   repoPath: string,
   branch: string,
 ): Promise<{ exists: boolean; existsOnRemote: boolean; ahead: number; behind: number }> {
-  const git = simpleGit(repoPath)
+  const g = git(repoPath)
 
   // Best-effort fetch; degrade if origin is unreachable
   try {
-    await git.fetch('origin')
+    await g.fetch('origin')
   } catch {
     // fall through
   }
@@ -98,7 +113,7 @@ export async function getBranchSyncState(
   // Check local branch existence
   let exists = false
   try {
-    const localBranches = await git.branchLocal()
+    const localBranches = await g.branchLocal()
     exists = localBranches.all.includes(branch)
   } catch {
     // can't determine
@@ -111,7 +126,7 @@ export async function getBranchSyncState(
   // Check remote branch existence
   let existsOnRemote = false
   try {
-    const remoteBranches = await git.branch(['-r'])
+    const remoteBranches = await g.branch(['-r'])
     existsOnRemote = remoteBranches.all.some(
       b => b.trim() === `origin/${branch}` || b.trim().endsWith(`/origin/${branch}`),
     )
@@ -126,7 +141,7 @@ export async function getBranchSyncState(
   let ahead = 0
   let behind = 0
   try {
-    const revList = (await git.raw(['rev-list', '--left-right', '--count', `origin/${branch}...${branch}`])).trim()
+    const revList = (await g.raw(['rev-list', '--left-right', '--count', `origin/${branch}...${branch}`])).trim()
     const parts = revList.split(/\s+/)
     behind = parseInt(parts[0] ?? '0', 10) || 0
     ahead = parseInt(parts[1] ?? '0', 10) || 0

@@ -12,6 +12,29 @@ import {
   getBranchSyncState,
 } from '../src/git/ops.js'
 
+// Save and restore git env vars so tests that create temp repos are not
+// affected by the GIT_DIR / GIT_WORK_TREE isolation set by the worktree runner.
+function saveGitEnv(): Record<string, string | undefined> {
+  return {
+    GIT_DIR: process.env.GIT_DIR,
+    GIT_WORK_TREE: process.env.GIT_WORK_TREE,
+    GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES,
+  }
+}
+
+function clearGitEnv(): void {
+  delete process.env.GIT_DIR
+  delete process.env.GIT_WORK_TREE
+  delete process.env.GIT_CEILING_DIRECTORIES
+}
+
+function restoreGitEnv(saved: Record<string, string | undefined>): void {
+  for (const [k, v] of Object.entries(saved)) {
+    if (v !== undefined) process.env[k] = v
+    else delete process.env[k]
+  }
+}
+
 // ── parseGitHubRemote ─────────────────────────────────────────────────────────
 
 describe('parseGitHubRemote', () => {
@@ -105,8 +128,11 @@ describe('classifyPushFailure', () => {
 
 describe('hasRemote', () => {
   let repoPath: string
+  let savedEnv: Record<string, string | undefined>
 
   beforeEach(() => {
+    savedEnv = saveGitEnv()
+    clearGitEnv()
     repoPath = mkdtempSync(join(tmpdir(), 'mc-ops-hasremote-'))
     execSync('git init', { cwd: repoPath })
     execSync('git config user.email "test@test.com"', { cwd: repoPath })
@@ -115,6 +141,7 @@ describe('hasRemote', () => {
   })
 
   afterEach(() => {
+    restoreGitEnv(savedEnv)
     rmSync(repoPath, { recursive: true, force: true })
   })
 
@@ -135,8 +162,11 @@ describe('hasRemote', () => {
 
 describe('getRemoteUrl', () => {
   let repoPath: string
+  let savedEnv: Record<string, string | undefined>
 
   beforeEach(() => {
+    savedEnv = saveGitEnv()
+    clearGitEnv()
     repoPath = mkdtempSync(join(tmpdir(), 'mc-ops-remoteurl-'))
     execSync('git init', { cwd: repoPath })
     execSync('git config user.email "test@test.com"', { cwd: repoPath })
@@ -145,6 +175,7 @@ describe('getRemoteUrl', () => {
   })
 
   afterEach(() => {
+    restoreGitEnv(savedEnv)
     rmSync(repoPath, { recursive: true, force: true })
   })
 
@@ -163,8 +194,11 @@ describe('getRemoteUrl', () => {
 describe('pushBranch', () => {
   let repoPath: string
   let originPath: string
+  let savedEnv: Record<string, string | undefined>
 
   beforeEach(() => {
+    savedEnv = saveGitEnv()
+    clearGitEnv()
     repoPath = mkdtempSync(join(tmpdir(), 'mc-ops-push-'))
     execSync('git init', { cwd: repoPath })
     execSync('git config user.email "test@test.com"', { cwd: repoPath })
@@ -177,6 +211,7 @@ describe('pushBranch', () => {
   })
 
   afterEach(() => {
+    restoreGitEnv(savedEnv)
     rmSync(repoPath, { recursive: true, force: true })
     rmSync(originPath, { recursive: true, force: true })
   })
@@ -225,8 +260,11 @@ describe('pushBranch', () => {
 describe('getBranchSyncState', () => {
   let repoPath: string
   let originPath: string
+  let savedEnv: Record<string, string | undefined>
 
   beforeEach(() => {
+    savedEnv = saveGitEnv()
+    clearGitEnv()
     repoPath = mkdtempSync(join(tmpdir(), 'mc-ops-sync-'))
     execSync('git init', { cwd: repoPath })
     execSync('git config user.email "test@test.com"', { cwd: repoPath })
@@ -240,6 +278,7 @@ describe('getBranchSyncState', () => {
   })
 
   afterEach(() => {
+    restoreGitEnv(savedEnv)
     rmSync(repoPath, { recursive: true, force: true })
     rmSync(originPath, { recursive: true, force: true })
   })
