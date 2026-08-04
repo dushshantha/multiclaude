@@ -88,11 +88,17 @@ export async function handleReportDone(
       // misattributed as "merge failed" and block downstream DAG tasks.
       try {
         await ensureIntegrationBranch(projectCwd, runId)
-        await mergeWorktreeBranch(projectCwd, task.branch, runId, task.worktree_path)
+        const mergeResult = await mergeWorktreeBranch(projectCwd, task.branch, runId, task.worktree_path)
         mergedIntoRun = true
-        db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
-          taskId, 'info', `Merged and pushed ${task.branch} to origin/${integBranch}`
-        )
+        if (mergeResult.push.ok) {
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            taskId, 'info', `Merged and pushed ${task.branch} to origin/${integBranch}`
+          )
+        } else {
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            taskId, 'warn', `push_failed: ${mergeResult.push.reason}: ${mergeResult.push.detail}`
+          )
+        }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
 

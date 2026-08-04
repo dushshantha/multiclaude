@@ -3,6 +3,7 @@ import { mkdtempSync } from 'fs'
 import { rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join, basename } from 'path'
+import { pushBranch, type PushResult } from './ops.js'
 
 export class MergeConflictError extends Error {
   constructor(
@@ -127,7 +128,7 @@ export async function mergeWorktreeBranch(
   branch: string,
   runId?: string,
   taskWorktreePath?: string,
-): Promise<void> {
+): Promise<{ push: PushResult }> {
   const key = getIntegBranch(runId)
   const prev = mergeLocks.get(key) ?? Promise.resolve()
   let resolve!: () => void
@@ -190,16 +191,11 @@ export async function mergeWorktreeBranch(
       throw new Error(`Merge verification failed: ${branch} is not an ancestor of ${integBranch} after merge`)
     }
 
-    // Push integration branch to origin so the orchestrator can create a PR
-    try {
-      await git.push('origin', integBranch)
-    } catch {
-      try {
-        await git.raw(['push', '--set-upstream', 'origin', integBranch])
-      } catch {
-        // No remote configured or push not possible — skip silently
-      }
-    }
+    // Push integration branch to origin so the orchestrator can create a PR.
+    // Push failures are returned to the caller — never thrown — so an otherwise
+    // successful merge is not rolled back due to a transient network issue.
+    const push = await pushBranch(repoPath, integBranch)
+    return { push }
   } finally {
     resolve()
     if (mergeLocks.get(key) === next) {
