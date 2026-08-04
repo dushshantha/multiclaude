@@ -112,16 +112,35 @@ export async function handleReportDone(
           db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
             taskId, 'warn', `post_merge_cleanup_failed: ${msg}`
           )
+        } else if (err instanceof MergeConflictError) {
+          // Conflict path: task work is committed on the branch — do NOT remove
+          // worktree/branch so the orchestrator and user can inspect/resolve it.
+          // failure_reason='merge_conflict' lets the orchestrator take targeted action.
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            taskId, 'error', `Merge conflict: ${task.branch} cannot be merged into ${integBranch} — conflicted files: ${err.conflictedFiles.join(', ')}`
+          )
+          updateTask(db, taskId, {
+            status: 'failed',
+            failure_reason: 'merge_conflict',
+            failure_detail: err.message,
+            conflicted_files: err.conflictedFiles,
+            conflict_branch: integBranch,
+          })
+          if (task.agent_id) {
+            updateAgent(db, task.agent_id, { status: 'done' })
+            const agent = getAgent(db, task.agent_id)
+            if (agent?.tmux_pane) killTmuxWindow(agent.tmux_pane)
+          }
+          return
         } else {
           // Genuine merge failure — mark the task failed.
-          const failureReason = err instanceof MergeConflictError ? 'merge conflict' : 'merge failed'
           db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
             taskId, 'error', `Merge failed: ${task.branch} could not be merged — ${msg}`
           )
           // Clean up the worktree so retries can recreate it with the same branch name
           await removeWorktree(projectCwd, { path: task.worktree_path, branch: task.branch })
             .catch(() => {}) // best-effort; don't mask the original merge error
-          updateTask(db, taskId, { status: 'failed', failure_reason: failureReason })
+          updateTask(db, taskId, { status: 'failed', failure_reason: 'merge failed' })
           if (task.agent_id) {
             updateAgent(db, task.agent_id, { status: 'done' })
             const agent = getAgent(db, task.agent_id)
