@@ -6,9 +6,14 @@ import type { Task } from '../state/tasks.js'
 import { addEdge, getReadyTasks, getBlockers } from '../state/dag.js'
 import { getAgent, listAgents, registerAgent, updateAgent } from '../state/agents.js'
 import { upsertProject, listProjects } from '../state/projects.js'
-import { createRun, getRun, listRunsWithStats, RunWithStats } from '../state/runs.js'
+import { createRun, getRun, listRunsWithStats, updateRun, RunWithStats } from '../state/runs.js'
 import { createWorktree, preflightReconcile, isProtectedBranch } from '../../git/worktree.js'
 import { killTmuxWindow, reapStaleWindows, ensureTmuxSession } from '../../spawner/tmux.js'
+import { hasRemote, getRemoteUrl, parseGitHubRemote, pushBranch, getBranchSyncState } from '../../git/ops.js'
+import type { PushResult } from '../../git/ops.js'
+import { createPullRequest } from '../../git/pr.js'
+import type { PrResult } from '../../git/pr.js'
+import { ensureIntegrationBranch, mergeWorktreeBranch, isAutoResolvable, RUN_INTEGRATION_BRANCH } from '../../git/merge.js'
 
 export const VALID_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type EffortValue = typeof VALID_EFFORT_VALUES[number]
@@ -476,4 +481,311 @@ export async function handleRecoverTask(
   }
 
   return { task_id: taskId, verdict: 'recovered', actions }
+}
+
+// ---------------------------------------------------------------------------
+// Git-oriented orchestrator handlers
+// ---------------------------------------------------------------------------
+
+function getRunRepoPath(db: Database.Database, run: { project_id: string }): string | null {
+  const proj = db.prepare('SELECT cwd FROM projects WHERE id = ?').get(run.project_id) as { cwd: string } | undefined
+  return proj?.cwd ?? null
+}
+
+export interface TaskGitInfo {
+  id: string
+  status: string
+  branch: string | null
+  merged_into_run: boolean | null
+  conflicted_files: string[] | null
+}
+
+export interface RunGitStatus {
+  runId: string
+  integrationBranch: string
+  branchExists: boolean
+  existsOnRemote: boolean
+  ahead: number
+  behind: number
+  hasRemote: boolean
+  github: { owner: string; repo: string } | null
+  tasks: TaskGitInfo[]
+  blockers: string[]
+}
+
+export async function handleGitStatus(
+  db: Database.Database,
+  runId: string,
+): Promise<RunGitStatus | { error: string }> {
+  const run = getRun(db, runId)
+  if (!run) return { error: `Run '${runId}' not found` }
+
+  const repoPath = getRunRepoPath(db, run)
+  if (!repoPath) return { error: `No project directory found for run '${runId}'` }
+
+  const integrationBranch = RUN_INTEGRATION_BRANCH(runId)
+
+  const [syncState, remoteConfigured, remoteUrl] = await Promise.all([
+    getBranchSyncState(repoPath, integrationBranch),
+    hasRemote(repoPath),
+    getRemoteUrl(repoPath),
+  ])
+
+  const github = remoteUrl ? parseGitHubRemote(remoteUrl) : null
+
+  const tasks = listTasks(db)
+    .filter(t => t.run_id === runId)
+    .map(t => ({
+      id: t.id,
+      status: t.status,
+      branch: t.branch,
+      merged_into_run: t.merged_into_run,
+      conflicted_files: t.conflicted_files,
+    }))
+
+  const blockers: string[] = []
+  const notDone = tasks.filter(t => t.status !== 'done')
+  if (notDone.length > 0) {
+    blockers.push(`${notDone.length} task(s) not done: ${notDone.map(t => t.id).join(', ')}`)
+  }
+  const unmerged = tasks.filter(t => t.status === 'done' && !t.merged_into_run)
+  if (unmerged.length > 0) {
+    blockers.push(`${unmerged.length} done task(s) not merged into run: ${unmerged.map(t => t.id).join(', ')}`)
+  }
+  const conflicted = tasks.filter(t => t.conflicted_files && t.conflicted_files.length > 0)
+  if (conflicted.length > 0) {
+    blockers.push(`${conflicted.length} task(s) have merge conflicts: ${conflicted.map(t => t.id).join(', ')}`)
+  }
+  if (!syncState.exists) {
+    blockers.push(`Integration branch '${integrationBranch}' does not exist locally`)
+  }
+  if (!remoteConfigured) {
+    blockers.push('No origin remote configured')
+  }
+
+  return {
+    runId,
+    integrationBranch,
+    branchExists: syncState.exists,
+    existsOnRemote: syncState.existsOnRemote,
+    ahead: syncState.ahead,
+    behind: syncState.behind,
+    hasRemote: remoteConfigured,
+    github,
+    tasks,
+    blockers,
+  }
+}
+
+export async function handlePushRunBranch(
+  db: Database.Database,
+  runId: string,
+): Promise<PushResult> {
+  const run = getRun(db, runId)
+  if (!run) return { ok: false, reason: 'push_failed', detail: `Run '${runId}' not found` }
+
+  const repoPath = getRunRepoPath(db, run)
+  if (!repoPath) return { ok: false, reason: 'push_failed', detail: `No project directory found for run '${runId}'` }
+
+  const branch = RUN_INTEGRATION_BRANCH(runId)
+  const result = await pushBranch(repoPath, branch)
+
+  if (!result.ok && result.reason === 'non_fast_forward') {
+    const g = simpleGit(repoPath)
+    try {
+      await g.fetch('origin')
+      await g.raw(['merge', `origin/${branch}`, '-m', `merge: origin/${branch} into ${branch} (push retry)`])
+    } catch {
+      return { ok: false, reason: 'non_fast_forward', detail: `Fetch+merge of origin/${branch} failed; manual reconciliation needed` }
+    }
+    return pushBranch(repoPath, branch)
+  }
+
+  return result
+}
+
+export interface CreatePrOpts {
+  title?: string
+  base?: string
+  body?: string
+}
+
+export async function handleCreatePr(
+  db: Database.Database,
+  runId: string,
+  opts?: CreatePrOpts,
+): Promise<(PrResult & { pushed?: PushResult }) | { ok: false; reason: string; detail: string; pushed?: PushResult }> {
+  const run = getRun(db, runId)
+  if (!run) return { ok: false, reason: 'run_not_found', detail: `Run '${runId}' not found` }
+
+  if (run.pr_url) {
+    return { ok: true, url: run.pr_url, number: 0, alreadyExisted: true }
+  }
+
+  const repoPath = getRunRepoPath(db, run)
+  if (!repoPath) return { ok: false, reason: 'no_repo', detail: `No project directory found for run '${runId}'` }
+
+  const tasks = listTasks(db).filter(t => t.run_id === runId)
+
+  const notDone = tasks.filter(t => t.status !== 'done')
+  if (notDone.length > 0) {
+    return { ok: false, reason: 'tasks_not_done', detail: `Cannot create PR: ${notDone.length} task(s) not done: ${notDone.map(t => t.id).join(', ')}` }
+  }
+
+  const unmerged = tasks.filter(t => !t.merged_into_run)
+  if (unmerged.length > 0) {
+    return { ok: false, reason: 'tasks_not_merged', detail: `Cannot create PR: ${unmerged.length} task(s) not merged into run: ${unmerged.map(t => t.id).join(', ')}` }
+  }
+
+  const head = RUN_INTEGRATION_BRANCH(runId)
+
+  const pushed = await handlePushRunBranch(db, runId)
+  if (!pushed.ok) {
+    return { ok: false, reason: 'push_failed', detail: `Cannot create PR: push failed — ${pushed.detail}`, pushed }
+  }
+
+  const base = opts?.base ?? await resolveDefaultBranch(repoPath)
+  const title = opts?.title ?? run.title
+
+  let body: string
+  if (opts?.body) {
+    body = opts.body
+  } else {
+    const lines = ['## Tasks included']
+    for (const t of tasks) {
+      const summary = getLastDoneSummary(db, t.id)
+      lines.push(`- **${t.id}**: ${summary ?? t.title}`)
+    }
+    const tickets = [...new Set(tasks.map(t => t.ticket).filter((t): t is string => t != null))]
+    if (tickets.length > 0) {
+      lines.push('')
+      lines.push(tickets.map(t => `closes ${t}`).join(', '))
+    }
+    body = lines.join('\n')
+  }
+
+  const prResult = await createPullRequest({ repoPath, head, base, title, body })
+
+  if (prResult.ok) {
+    updateRun(db, runId, { pr_url: prResult.url })
+  }
+
+  return { ...prResult, pushed }
+}
+
+function getLastDoneSummary(db: Database.Database, taskId: string): string | null {
+  const row = db.prepare(
+    "SELECT message FROM logs WHERE task_id = ? AND level = 'info' AND message LIKE 'DONE:%' ORDER BY created_at DESC LIMIT 1"
+  ).get(taskId) as { message: string } | undefined
+  if (!row) return null
+  return row.message.replace(/^DONE:\s*/, '')
+}
+
+async function resolveDefaultBranch(repoPath: string): Promise<string> {
+  const g = simpleGit(repoPath)
+  try {
+    const ref = (await g.raw(['symbolic-ref', 'refs/remotes/origin/HEAD'])).trim()
+    return ref.replace(/^refs\/remotes\/origin\//, '')
+  } catch {
+    return 'main'
+  }
+}
+
+export interface ResolveResult {
+  ok: boolean
+  needsWorker?: boolean
+  conflictedFiles?: string[]
+  detail?: string
+}
+
+export async function handleResolveMergeConflict(
+  db: Database.Database,
+  taskId: string,
+  opts?: { strategy?: 'ours' | 'theirs' },
+): Promise<ResolveResult> {
+  const task = getTask(db, taskId)
+  if (!task) return { ok: false, detail: `Task '${taskId}' not found` }
+
+  if (task.failure_reason !== 'merge_conflict') {
+    return { ok: false, detail: `Task '${taskId}' is not in merge_conflict state (failure_reason: ${task.failure_reason ?? 'none'})` }
+  }
+
+  if (!task.branch || !task.repo_path) {
+    return { ok: false, detail: `Task '${taskId}' missing branch or repo_path` }
+  }
+
+  const repoPath = task.repo_path
+  const integBranch = task.conflict_branch ?? RUN_INTEGRATION_BRANCH(task.run_id ?? '')
+
+  try {
+    await ensureIntegrationBranch(repoPath, task.run_id ?? undefined)
+    await mergeWorktreeBranch(repoPath, task.branch, task.run_id ?? undefined, task.worktree_path ?? undefined)
+
+    updateTask(db, taskId, {
+      status: 'done',
+      merged_into_run: true,
+      conflicted_files: null,
+      conflict_branch: null,
+      failure_reason: undefined,
+      failure_detail: undefined,
+    })
+
+    return { ok: true }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+
+    // Check which files remain conflicted from the error
+    const conflictMatch = msg.match(/conflicted files: (.+)/)
+    let conflictedFiles = task.conflicted_files ?? []
+    if (conflictMatch) {
+      conflictedFiles = conflictMatch[1].split(', ').filter(Boolean)
+    }
+
+    const autoResolvable = conflictedFiles.filter(f => isAutoResolvable(f))
+    const nonAutoResolvable = conflictedFiles.filter(f => !isAutoResolvable(f))
+
+    if (nonAutoResolvable.length === 0) {
+      // All remaining conflicts are auto-resolvable — should have been handled by mergeWorktreeBranch
+      return { ok: false, detail: `Auto-resolvable files still conflicting unexpectedly: ${autoResolvable.join(', ')}` }
+    }
+
+    if (opts?.strategy) {
+      // Explicit strategy provided — apply it via a direct merge with the strategy
+      const g = simpleGit(repoPath)
+      try {
+        // Attempt merge with the given strategy for remaining files
+        await g.raw(['checkout', integBranch])
+        try {
+          await g.merge([task.branch, '--no-ff', '-m', `merge: ${task.branch} into ${integBranch} (conflict resolution)`])
+        } catch {
+          // Resolve all conflicted files with the given strategy
+          const currentConflicted = (await g.raw(['diff', '--name-only', '--diff-filter=U'])).trim().split('\n').filter(Boolean)
+          if (currentConflicted.length > 0) {
+            await g.raw(['checkout', `--${opts.strategy}`, ...currentConflicted])
+            await g.raw(['add', ...currentConflicted])
+            await g.raw(['commit', '-m', `merge: ${task.branch} into ${integBranch} (conflict resolved with ${opts.strategy})`])
+          }
+        }
+
+        updateTask(db, taskId, {
+          status: 'done',
+          merged_into_run: true,
+          conflicted_files: null,
+          conflict_branch: null,
+          failure_reason: undefined,
+          failure_detail: undefined,
+        })
+
+        return { ok: true }
+      } catch (strategyErr: unknown) {
+        const strategyMsg = strategyErr instanceof Error ? strategyErr.message : String(strategyErr)
+        // Abort any in-progress merge
+        try { await g.raw(['merge', '--abort']) } catch { /* ignore */ }
+        return { ok: false, needsWorker: true, conflictedFiles: nonAutoResolvable, detail: `Strategy resolution failed: ${strategyMsg}` }
+      }
+    }
+
+    // No strategy provided — don't silently pick a side
+    return { ok: false, needsWorker: true, conflictedFiles: nonAutoResolvable }
+  }
 }
