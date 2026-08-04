@@ -89,7 +89,7 @@ function createLocalhostOAuthProvider(): OAuthServerProvider {
 }
 
 // Factory: create a fresh McpServer with orchestrator tools bound to the given db.
-function createOrchestratorMcp(db: Database.Database): McpServer {
+export function createOrchestratorMcp(db: Database.Database): McpServer {
   const server = new McpServer({ name: 'multiclaude-orchestrator', version: '1.0.0' })
 
   server.tool(
@@ -273,7 +273,7 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
 }
 
 // Factory: create a fresh McpServer with worker tools bound to the given db.
-function createWorkerMcp(db: Database.Database): McpServer {
+export function createWorkerMcp(db: Database.Database): McpServer {
   const server = new McpServer({ name: 'multiclaude-worker', version: '1.0.0' })
 
   server.tool(
