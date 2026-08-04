@@ -9,7 +9,6 @@ export interface Run {
   title: string
   external_ref: string | null
   budget_usd: number | null
-  pr_url: string | null
   status: RunStatus
   created_at: string
 }
@@ -59,14 +58,6 @@ export interface RunWithStats extends Run {
   first_started_at: string | null
   last_updated_at: string | null
   derived_status: DerivedRunStatus
-}
-
-export function updateRun(db: Database.Database, id: string, updates: { pr_url?: string }): void {
-  const sets: string[] = []
-  const params: Record<string, unknown> = { id }
-  if (updates.pr_url !== undefined) { sets.push('pr_url = @pr_url'); params.pr_url = updates.pr_url }
-  if (sets.length === 0) return
-  db.prepare(`UPDATE runs SET ${sets.join(', ')} WHERE id = @id`).run(params as any)
 }
 
 export function listRunsWithStats(db: Database.Database, project_id?: string): RunWithStats[] {

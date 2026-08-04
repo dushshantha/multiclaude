@@ -101,7 +101,6 @@ export function createDb(path: string = './multiclaude.db'): Database.Database {
   try { db.exec("ALTER TABLE tasks ADD COLUMN merged_into_run INTEGER") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN conflicted_files TEXT") } catch { /* already exists */ }
   try { db.exec("ALTER TABLE tasks ADD COLUMN conflict_branch TEXT") } catch { /* already exists */ }
-  try { db.exec("ALTER TABLE runs ADD COLUMN pr_url TEXT") } catch { /* already exists */ }
   return db
 }
 
