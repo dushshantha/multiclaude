@@ -380,7 +380,7 @@ async function main() {
       process.exit(1)
     }
     const runtime = useCursor ? 'cursor' : 'claude'
-    runInit({ projectDir: process.cwd(), runtime })
+    await runInit({ projectDir: process.cwd(), runtime })
     return
   }
 

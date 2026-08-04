@@ -81,7 +81,7 @@ async function getOriginRemote(repoPath: string): Promise<string | null> {
 }
 
 /** Check if gh CLI is available. */
-async function isGhAvailable(): Promise<boolean> {
+export async function isGhAvailable(): Promise<boolean> {
   try {
     await execFile('gh', ['--version'])
     return true
@@ -91,7 +91,7 @@ async function isGhAvailable(): Promise<boolean> {
 }
 
 /** Check if gh CLI is authenticated. */
-async function isGhAuthenticated(repoPath: string): Promise<boolean> {
+export async function isGhAuthenticated(repoPath: string): Promise<boolean> {
   try {
     await execFile('gh', ['auth', 'status'], { cwd: repoPath })
     return true
