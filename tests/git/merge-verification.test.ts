@@ -222,12 +222,12 @@ describe('merge verification in handleReportDone', () => {
 
     const task = getTask(db, 'task-conflict')
     expect(task?.status).toBe('failed')
-    expect(task?.failure_reason).toBe('merge conflict')
+    expect(task?.failure_reason).toBe('merge_conflict')
 
     const log = db.prepare(
       "SELECT * FROM logs WHERE task_id = 'task-conflict' AND level = 'error'"
     ).get() as { message: string } | undefined
-    expect(log?.message).toContain('Merge failed')
+    expect(log?.message).toContain('Merge conflict')
     expect(log?.message).toContain('conflict')
   })
 
@@ -279,7 +279,7 @@ describe('merge verification in handleReportDone', () => {
     await handleReportDone(db, 'task-conflict', 'done')
 
     const conflictTask = getTask(db, 'task-conflict')
-    expect(conflictTask?.failure_reason).toBe('merge conflict')
+    expect(conflictTask?.failure_reason).toBe('merge_conflict')
 
     // The two reasons are distinct
     expect(emptyTask?.failure_reason).not.toBe(conflictTask?.failure_reason)

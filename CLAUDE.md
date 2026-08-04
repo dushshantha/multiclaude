@@ -39,7 +39,9 @@ src/server/index.ts      Express HTTP server on port 7432 (default).
 
 src/server/tools/        MCP tool handlers (pure functions over the SQLite db).
   orchestrator.ts        plan_dag, spawn_worker, get_system_status, wait_for_event,
-                         create_run, list_projects, list_runs, cancel_task, complete_task
+                         create_run, list_projects, list_runs, cancel_task, complete_task,
+                         recover_task, git_status, push_run_branch, create_pr,
+                         resolve_merge_conflict (see "Self-service git pipeline" below)
   worker.ts              get_my_task, report_progress, report_done, report_blocked
 
 src/server/state/        SQLite state via better-sqlite3 (WAL mode).
@@ -64,7 +66,17 @@ src/spawner/stuck-watcher.ts  Detects agents that haven't progressed past thresh
 src/git/worktree.ts      createWorktree / removeWorktree using git worktree add.
                          branchNameFromTitle() derives branch names from task titles.
 src/git/merge.ts         ensureIntegrationBranch / mergeWorktreeBranch.
-                         Auto-resolves package-lock.json add/add conflicts (takes theirs).
+                         Auto-resolves lock-file conflicts; serializes concurrent merges
+                         with an in-process mutex keyed on the integration branch name.
+src/git/ops.ts           Low-level git helpers used by the orchestrator-side pipeline:
+                         hasRemote, getRemoteUrl, parseGitHubRemote, pushBranch,
+                         getBranchSyncState. All functions strip GIT_DIR / GIT_WORK_TREE
+                         from the subprocess env so they operate on the target repo rather
+                         than the orchestrator's own worktree.
+src/git/pr.ts            GitHub pull-request creation: createPullRequest() — tries gh CLI
+                         first, falls back to GitHub REST API if GITHUB_TOKEN is set.
+                         Idempotent (checks for an existing open PR before creating).
+                         Requires either `gh auth login` or GITHUB_TOKEN / GH_TOKEN env var.
 
 src/init.ts              `multiclaude init`: writes CLAUDE.md (or .cursor/rules/*.mdc),
                          .multiclaude.json, and .claude/settings.local.json in target project.
@@ -75,12 +87,47 @@ src/web/server.ts        Express web dashboard with SSE live updates on port 743
 
 prompts/orchestrator.md  System prompt injected into CLAUDE.md of target projects.
 prompts/worker.md        System prompt passed as CLI arg to each worker subprocess.
-tests/                   Vitest test suite (214 tests across 20 files).
+tests/                   Vitest test suite (644 tests across 44 files).
+                         tests/setup.ts clears GIT_DIR / GIT_WORK_TREE / GIT_CEILING_DIRECTORIES
+                         at module load so git-creating tests work when run inside a worktree.
 ```
 
 ### Git isolation model
 
 Each task gets its own git worktree in a temp directory (`/tmp/mc-<taskId>-XXXX/`) on a branch like `feature/task-slug` or `fix/task-slug`. When a worker calls `report_done`, the server merges the task branch into a per-run integration branch (`mc/run-<runId>`). The orchestrator creates a PR from that integration branch to `main` after all tasks complete.
+
+### Self-service git pipeline
+
+Four new orchestrator-scoped MCP tools let the orchestrator manage the full git → push → PR lifecycle without user intervention:
+
+| Tool | What it does |
+|------|-------------|
+| `git_status(run_id)` | Snapshots the integration branch: local/remote existence, ahead/behind counts, per-task merge state, and a `blockers[]` list of human-readable obstacles (unmerged tasks, missing remote, etc.) |
+| `push_run_branch(run_id)` | Pushes `mc/run-<runId>` to `origin`. On `non_fast_forward`, automatically fetches and merges `origin/<branch>` before retrying. |
+| `create_pr(run_id)` | Guards that all tasks are `done` and `merged_into_run`, pushes the branch, builds a PR body from each task's `DONE:` summary log, applies per-ticket `closes #N` keywords (one per issue to satisfy GitHub's syntax), and calls `createPullRequest()` in `src/git/pr.ts`. Stores `pr_url` on the run row for idempotency. |
+| `resolve_merge_conflict(task_id)` | Re-drives the merge. If conflicts remain in non-auto-resolvable files, spawns a `conflict-<taskId>` worker in a fresh worktree already in MERGE_IN_PROGRESS state (see conflict-resolution flow below). |
+
+**PR creation prerequisites (user setup):**
+Either `gh auth login` (GitHub CLI) or `GITHUB_TOKEN` / `GH_TOKEN` env var must be set before `create_pr` can open a real PR. `create_pr` will return `ok: false` with a specific `reason` and actionable `detail` string when auth is absent.
+
+### Conflict-resolution flow
+
+When `mergeWorktreeBranch` finds semantic conflicts (files that are not auto-resolvable lock files), it throws `MergeConflictError`. `handleReportDone` catches this and:
+
+1. Logs the conflict at `error` level: `Merge conflict: <branch> cannot be merged into <integBranch> — conflicted files: <files>`
+2. Sets the task to `status: 'failed'`, `failure_reason: 'merge_conflict'`, `conflicted_files: [...]`, `conflict_branch: <integBranch>`
+3. **Keeps the worktree** (does not `removeWorktree`) so the orchestrator and resolution worker can inspect the committed state.
+
+When the orchestrator calls `resolve_merge_conflict(task_id)`:
+
+1. Re-attempts `mergeWorktreeBranch`. If the re-attempt succeeds (e.g. the conflict was transient or already resolved), the task is marked `done` and `merged_into_run: true`.
+2. If the merge still conflicts on non-auto-resolvable files, `spawnConflictResolutionWorker` runs:
+   - Creates a `conflict-<taskId>` task with a detailed description listing each conflicted file.
+   - Creates a fresh worktree based on the integration branch and runs `git merge <taskBranch>` inside it, leaving the worktree in MERGE_IN_PROGRESS state with conflict markers in place.
+   - Registers an agent (`w-conflict-<taskId>`) in `spawning` state — the spawner watcher picks this up and launches a Claude subprocess with full git context.
+   - Returns `needsWorker: true` so the orchestrator knows a worker has been dispatched.
+
+The conflict worker's job: resolve each conflicted file, stage it, commit the merge, and call `report_done`. `handleReportDone` then detects `conflict_worker_for` on the task and marks the original task `done` if its branch is now an ancestor of the integration branch.
 
 ### Key data flows
 
