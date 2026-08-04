@@ -2,7 +2,7 @@ import express from 'express'
 import { createServer } from 'http'
 import { randomUUID } from 'crypto'
 import { createDb } from './state/db.js'
-import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker, handleCompleteTask, handleCreateRun, handleListProjects, handleListRuns, handleRecoverTask } from './tools/orchestrator.js'
+import { handlePlanDag, handleGetSystemStatus, handleWaitForEvent, handleCancelTask, handleSpawnWorker, handleCompleteTask, handleCreateRun, handleListProjects, handleListRuns, handleRecoverTask, handleGitStatus, handlePushRunBranch, handleCreatePr, handleResolveMergeConflict } from './tools/orchestrator.js'
 import { backfillProjectsFromAgents } from './state/projects.js'
 import { handleGetMyTask, handleReportProgress, handleReportDone, handleReportBlocked } from './tools/worker.js'
 import type Database from 'better-sqlite3'
@@ -89,7 +89,7 @@ function createLocalhostOAuthProvider(): OAuthServerProvider {
 }
 
 // Factory: create a fresh McpServer with orchestrator tools bound to the given db.
-function createOrchestratorMcp(db: Database.Database): McpServer {
+export function createOrchestratorMcp(db: Database.Database): McpServer {
   const server = new McpServer({ name: 'multiclaude-orchestrator', version: '1.0.0' })
 
   server.tool(
@@ -221,11 +221,59 @@ function createOrchestratorMcp(db: Database.Database): McpServer {
     }
   )
 
+  server.tool(
+    'git_status',
+    'Check the git/merge readiness of a run\'s integration branch. Returns branch sync state, per-task merge status, and a blockers list. Call this before push_run_branch or create_pr to confirm everything is merged and the branch is ahead of remote.',
+    { run_id: z.string() },
+    async ({ run_id }) => {
+      const result = await handleGitStatus(db, run_id)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+    }
+  )
+
+  server.tool(
+    'push_run_branch',
+    'Push the run\'s integration branch to origin. Retries automatically on non-fast-forward by fetching and merging first. Call this before create_pr when the branch needs to be on the remote, or call create_pr directly (it pushes internally).',
+    { run_id: z.string() },
+    async ({ run_id }) => {
+      const result = await handlePushRunBranch(db, run_id)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+    }
+  )
+
+  server.tool(
+    'create_pr',
+    'Open the run\'s pull request. Pushes the integration branch first and generates the body and issue-closing keywords automatically from task summaries and ticket fields. Use this instead of asking the user to open a PR.',
+    {
+      run_id: z.string(),
+      title: z.string().optional().describe('PR title — defaults to the run title'),
+      base: z.string().optional().describe('Base branch — defaults to the repo default branch (usually main)'),
+      body: z.string().optional().describe('PR body — defaults to auto-generated body with task summaries and closing keywords'),
+    },
+    async ({ run_id, title, base, body }) => {
+      const result = await handleCreatePr(db, run_id, { title, base, body })
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+    }
+  )
+
+  server.tool(
+    'resolve_merge_conflict',
+    'Attempt to resolve a merge conflict on a task that failed with failure_reason=merge_conflict. Without a strategy, re-drives the merge and auto-resolves lock files only. Pass strategy="ours" or "theirs" to force-resolve all remaining conflicts — use only when semantic conflicts can be safely discarded.',
+    {
+      task_id: z.string(),
+      strategy: z.enum(['ours', 'theirs']).optional().describe('Force-resolve strategy. "ours" keeps the integration branch version; "theirs" keeps the task branch version. Omit to attempt auto-resolution only.'),
+    },
+    async ({ task_id, strategy }) => {
+      const result = await handleResolveMergeConflict(db, task_id, strategy ? { strategy } : undefined)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+    }
+  )
+
   return server
 }
 
 // Factory: create a fresh McpServer with worker tools bound to the given db.
-function createWorkerMcp(db: Database.Database): McpServer {
+export function createWorkerMcp(db: Database.Database): McpServer {
   const server = new McpServer({ name: 'multiclaude-worker', version: '1.0.0' })
 
   server.tool(
