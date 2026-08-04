@@ -90,11 +90,10 @@ export async function handleReportDone(
         await ensureIntegrationBranch(projectCwd, runId)
         const mergeResult = await mergeWorktreeBranch(projectCwd, task.branch, runId, task.worktree_path)
         mergedIntoRun = true
-        if (mergeResult.push.ok) {
-          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
-            taskId, 'info', `Merged and pushed ${task.branch} to origin/${integBranch}`
-          )
-        } else {
+        db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+          taskId, 'info', `Merged ${task.branch} into ${integBranch}`
+        )
+        if (!mergeResult.push.ok) {
           db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
             taskId, 'warn', `push_failed: ${mergeResult.push.reason}: ${mergeResult.push.detail}`
           )
