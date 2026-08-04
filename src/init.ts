@@ -3,6 +3,8 @@ import { join, dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { writeConfig } from './config.js'
 import type { WorkerRuntime } from './config.js'
+import { checkIsGitRepo, getRemoteUrl, parseGitHubRemote } from './git/ops.js'
+import { isGhAvailable, isGhAuthenticated } from './git/pr.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -14,11 +16,17 @@ export const MULTICLAUDE_PERMISSIONS = [
   'mcp__multiclaude-coord__spawn_worker',
   'mcp__multiclaude-coord__cancel_task',
   'mcp__multiclaude-coord__complete_task',
+  'mcp__multiclaude-coord__create_run',
+  'mcp__multiclaude-coord__recover_task',
+  'mcp__multiclaude-coord__list_projects',
+  'mcp__multiclaude-coord__list_runs',
   // Worker tools — accessed via 'multiclaude-worker' MCP server (injected via --mcp-config)
   'mcp__multiclaude-worker__get_my_task',
   'mcp__multiclaude-worker__report_progress',
   'mcp__multiclaude-worker__report_done',
   'mcp__multiclaude-worker__report_blocked',
+  // Orchestrator Bash access — gh only, for fetching GitHub issue/PR context
+  'Bash(gh:*)',
   'Bash(npm install:*)',
   'Bash(npm test:*)',
   'Bash(npm start:*)',
@@ -33,7 +41,70 @@ export interface InitOptions {
   runtime?: WorkerRuntime
 }
 
-export function runInit(opts: InitOptions = {}): void {
+export interface PreflightResult {
+  isGitRepo: boolean
+  hasOriginRemote: boolean
+  isGitHubRemote: boolean
+  ghAvailable: boolean
+  ghAuthenticated: boolean
+  hasToken: boolean
+  warnings: string[]
+}
+
+export async function runPreflightChecks(projectDir: string): Promise<PreflightResult> {
+  const result: PreflightResult = {
+    isGitRepo: false,
+    hasOriginRemote: false,
+    isGitHubRemote: false,
+    ghAvailable: false,
+    ghAuthenticated: false,
+    hasToken: false,
+    warnings: [],
+  }
+
+  result.isGitRepo = await checkIsGitRepo(projectDir)
+  if (!result.isGitRepo) {
+    result.warnings.push(
+      'Not a git repo — run: git init && git remote add origin <url>',
+    )
+    return result
+  }
+
+  const remoteUrl = await getRemoteUrl(projectDir)
+  result.hasOriginRemote = remoteUrl !== null
+  if (!result.hasOriginRemote) {
+    result.warnings.push(
+      'No origin remote — create_pr will not be able to open PRs until you add one: git remote add origin <url>',
+    )
+  } else {
+    const parsed = parseGitHubRemote(remoteUrl!)
+    result.isGitHubRemote = parsed !== null
+    if (!result.isGitHubRemote) {
+      result.warnings.push(
+        `origin remote (${remoteUrl}) is not a GitHub URL — create_pr requires a github.com remote`,
+      )
+    } else {
+      result.hasToken = !!(process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN)
+      result.ghAvailable = await isGhAvailable()
+      if (result.ghAvailable) {
+        result.ghAuthenticated = await isGhAuthenticated(projectDir)
+        if (!result.ghAuthenticated && !result.hasToken) {
+          result.warnings.push(
+            'gh CLI not authenticated and no GITHUB_TOKEN/GH_TOKEN set — run: gh auth login',
+          )
+        }
+      } else if (!result.hasToken) {
+        result.warnings.push(
+          'gh CLI not installed and no GITHUB_TOKEN/GH_TOKEN set — PR creation will fail. Install gh from https://cli.github.com/ or set GITHUB_TOKEN',
+        )
+      }
+    }
+  }
+
+  return result
+}
+
+export async function runInit(opts: InitOptions = {}): Promise<void> {
   const projectDir = resolve(opts.projectDir ?? process.cwd())
   const runtime: WorkerRuntime = opts.runtime ?? 'claude'
 
@@ -61,6 +132,14 @@ export function runInit(opts: InitOptions = {}): void {
 
   console.log(`\nMake sure MultiClaude is running: multiclaude start`)
   console.log('Then just run:                    ' + (runtime === 'cursor' ? 'cursor agent' : 'claude') + '   (from this directory)')
+
+  const preflight = await runPreflightChecks(projectDir)
+  if (preflight.warnings.length > 0) {
+    console.log('\n⚠️  Setup warnings (init succeeded — these are non-blocking):')
+    for (const w of preflight.warnings) {
+      console.log(`   • ${w}`)
+    }
+  }
 }
 
 function updateSettings(projectDir: string): void {
