@@ -9,6 +9,7 @@
 >
 > **Allowed tools:**
 > - `multiclaude-coord` MCP tools: `plan_dag`, `get_system_status`, `spawn_worker`, `cancel_task`, `complete_task`
+> - `multiclaude-coord` git tools: `git_status`, `push_run_branch`, `create_pr`, `resolve_merge_conflict` — use these for **all** git and PR work; never use Bash for git
 > - `AskUserQuestion` — for the plan approval step (see Step 3 below)
 > - Any other MCP tools the user has configured (GitHub, Jira, Linear, Slack, etc.) — use these freely to read issues, fetch context, and understand requirements
 > - `Read` — for reading local files, specs, or design docs the user points you to
@@ -16,7 +17,7 @@
 >
 > **Banned tools — never use these:**
 > - `Agent` (built-in subagent, previously called `Task`) — workers do the implementation, not you
-> - `Bash` — except for `gh` CLI commands listed above; never run build commands, scripts, or any other shell commands
+> - `Bash` — except for `gh` CLI commands listed above; never run git commands, build commands, scripts, or any other shell commands. Git work must go through the `multiclaude-coord` git tools — this keeps all repo operations server-side and prevents the orchestrator from accidentally mutating state outside its managed branches.
 > - `Write` / `Edit` — you don't create or modify files
 >
 > The distinction: **fetching context is fine, implementing is not.**
@@ -159,29 +160,15 @@ Escalating to user before proceeding.
 
 Only proceed to PR creation once all done tasks have `merged_into_run: true`.
 
-1. Use the GitHub MCP tool (`mcp__github__create_pull_request`) to open a PR:
-   - **head branch:** `mc/run-{runId}`
-   - **base branch:** `main`
-   - **title:** the run title (from `create_run`)
-   - **body:** list each completed task with its summary, e.g.:
-     ```
-     ## Tasks included
-     - **task-id-1**: summary from report_done
-     - **task-id-2**: summary from report_done
-     ```
+1. Call `create_pr(run_id)` — the tool pushes the integration branch, builds the PR body from each task's `report_done` summary, assembles the closing keywords correctly, and opens the PR against `main`.
 
-2. **Closing keywords (CRITICAL):** Append a closing line that automatically closes all referenced issues upon merge. Assemble this mechanically from the distinct `ticket` values on the run's tasks:
-   - Collect all unique issue numbers from task `ticket` fields (e.g. if tasks have `ticket: "#42"`, `"#45"`, `"#42"`, collect `["#42", "#45"]`)
-   - Build the line as: `Closes #42, closes #45` (one `closes` keyword per issue)
-   - **⚠️ The trap:** `Closes #42, #45` closes only #42 — GitHub interprets the comma-separated list as a single reference. You must repeat `closes` for each issue.
-   - **Also note:** Issue numbers in the PR title do NOT close anything — only keywords in the body work.
-   - Append the closing line to the PR body at the end, on its own line(s)
+   > **Why the tool handles closing keywords:** GitHub's closing keyword syntax is a trap — `Closes #42, #45` closes only #42, not both; you must write `Closes #42, closes #45` (one `closes` keyword per issue). The tool does this mechanically so the orchestrator never gets it wrong.
 
-3. After the PR merges, verify that each referenced issue actually closed. If any remain open, the closing keywords may not have been applied correctly — escalate to the user.
+2. The tool returns the PR URL. Share it with the user.
 
-4. Share the PR URL with the user.
+3. After the PR merges, verify that each referenced issue actually closed. If any remain open, escalate to the user.
 
-5. **Do not merge** — the user must approve the PR before merging to main.
+4. **Do not merge** — the user must approve the PR before merging to main.
 
 ---
 
@@ -269,9 +256,26 @@ When a task fails, attempt recovery before escalating. The recovery-first policy
 **Escalation phase** (only when recovery verdict isn't `recovered`):
 1. State what recovery already attempted and what was found
 2. Be specific about the decision needed — not a list of shell commands or logs for the user to debug
-3. The orchestrator must not run shell commands; recovery is handled server-side by `recover_task` and the coordination server
+3. The orchestrator must not run shell commands; recovery is handled server-side by `recover_task` and the coordination server. For git-related failures (branch not pushed, merge conflict blocking the PR, unclear branch state), use the `push_run_branch`, `resolve_merge_conflict`, or `git_status` tools before escalating — see **Git Situations** below.
 
 Example escalation: *"Task X failed with [specific error]. Recovery attempted [strategies tried]. Root cause: [what was found]. Need user input: [specific decision]."*
+
+---
+
+## Git Situations
+
+The orchestrator resolves git problems itself using MCP tools. Only escalate when a real human decision is required (auth/credentials, a genuine semantic conflict the conflict worker could not settle, or a force-push / history rewrite).
+
+| Situation | What to do |
+|-----------|-----------|
+| All tasks done — need to open PR | Call `create_pr(run_id)`. Do not use any GitHub MCP tool directly. |
+| Integration branch not pushed / push rejected | Call `push_run_branch(run_id)` first, then retry `create_pr`. |
+| A task is in `merge_conflict` status | Call `resolve_merge_conflict(task_id)` — the tool attempts an automatic resolution. If it returns `resolved`, re-spawn the task. If it returns `needs_human`, escalate with the specific conflict details. |
+| Unsure what is blocking a PR (branch behind main, dirty state, etc.) | Call `git_status(run_id)` to get a snapshot of the integration branch state before deciding next steps. |
+| Git auth failure / credentials missing | Escalate to user immediately — this requires a human action outside the system. |
+| Force-push or history rewrite needed | Escalate to user — never do this autonomously. |
+
+**Principle:** every git operation the orchestrator needs has a corresponding MCP tool. If you feel the urge to open a Bash terminal for git work, use the tool instead.
 
 ---
 
@@ -290,6 +294,10 @@ Example escalation: *"Task X failed with [specific error]. Recovery attempted [s
 | `complete_task(task_id, summary)` | Recovery only — when worker did work but died without reporting |
 | `list_projects()` | List all projects with aggregate stats (task counts, run count, last_active_at) |
 | `list_runs(project_id?)` | List runs (optionally filtered by project); each shows task counts and derived_status |
+| `git_status(run_id)` | Get a snapshot of the integration branch state — use when unsure what is blocking a PR or before retrying a push |
+| `push_run_branch(run_id)` | Push the integration branch to origin — use when branch is not yet pushed or a push was rejected |
+| `create_pr(run_id)` | Open the PR after all tasks complete — pushes branch, builds body from task summaries, applies closing keywords, returns PR URL |
+| `resolve_merge_conflict(task_id)` | Attempt automatic resolution of a merge conflict on a task branch — returns `resolved` or `needs_human` |
 
 ---
 

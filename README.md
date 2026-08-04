@@ -271,7 +271,7 @@ npx vitest run tests/spawner/stuck-watcher.test.ts  # busy-footer skip logic
 npm test
 ```
 
-214 tests across state management, DAG engine, MCP tool handlers, git worktrees, spawner backends, and the coordination server.
+644 tests across state management, DAG engine, MCP tool handlers, git worktrees, spawner backends, and the coordination server (including end-to-end pipeline tests).
 
 ## Project Structure
 
@@ -290,6 +290,8 @@ src/
   git/
     worktree.ts           # createWorktree, removeWorktree
     merge.ts              # ensureIntegrationBranch, mergeWorktreeBranch
+    ops.ts                # pushBranch, getBranchSyncState, hasRemote, parseGitHubRemote
+    pr.ts                 # createPullRequest (gh CLI → GITHUB_TOKEN API fallback)
   spawner/index.ts        # spawnWorker (process backend), buildWorkerMcpConfig
   spawner/tmux.ts         # tmux worker backend: session/window management, pane capture, sendToPane
   spawner/backend.ts      # runtime backend seam: ProcessBackend | CursorBackend | TmuxBackend
@@ -312,5 +314,7 @@ The agent observability MCP server has been moved to its own repository:
 - **Transport:** MCP over Streamable HTTP (`type: "http"`) with OAuth 2.0 auto-auth
 - **State:** SQLite with WAL mode; task statuses: `pending → in_progress → done | failed | cancelled`
 - **DAG scheduling:** `getReadyTasks()` returns tasks whose blockers are all `done`
-- **Git isolation:** Workers get their own branch (`mc/task-{id}`) and merge into `mc/integration`
+- **Git isolation:** Workers get their own branch (`mc/task-{id}`) and merge into `mc/run-<runId>`
 - **Retry logic:** Failed tasks retry up to `max_retries` times before escalating to the user
+- **Self-service PR flow:** After all tasks complete, the orchestrator calls `git_status` → `push_run_branch` → `create_pr` without user interaction. Requires `gh auth login` or `GITHUB_TOKEN`/`GH_TOKEN` for PR creation.
+- **Conflict resolution:** Semantic merge conflicts spawn a `conflict-<taskId>` worker whose worktree is already in MERGE_IN_PROGRESS state with conflict markers. The worker resolves the conflicts, commits, and calls `report_done`.

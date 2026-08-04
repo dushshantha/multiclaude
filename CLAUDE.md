@@ -39,7 +39,9 @@ src/server/index.ts      Express HTTP server on port 7432 (default).
 
 src/server/tools/        MCP tool handlers (pure functions over the SQLite db).
   orchestrator.ts        plan_dag, spawn_worker, get_system_status, wait_for_event,
-                         create_run, list_projects, list_runs, cancel_task, complete_task
+                         create_run, list_projects, list_runs, cancel_task, complete_task,
+                         recover_task, git_status, push_run_branch, create_pr,
+                         resolve_merge_conflict (see "Self-service git pipeline" below)
   worker.ts              get_my_task, report_progress, report_done, report_blocked
 
 src/server/state/        SQLite state via better-sqlite3 (WAL mode).
@@ -64,7 +66,17 @@ src/spawner/stuck-watcher.ts  Detects agents that haven't progressed past thresh
 src/git/worktree.ts      createWorktree / removeWorktree using git worktree add.
                          branchNameFromTitle() derives branch names from task titles.
 src/git/merge.ts         ensureIntegrationBranch / mergeWorktreeBranch.
-                         Auto-resolves package-lock.json add/add conflicts (takes theirs).
+                         Auto-resolves lock-file conflicts; serializes concurrent merges
+                         with an in-process mutex keyed on the integration branch name.
+src/git/ops.ts           Low-level git helpers used by the orchestrator-side pipeline:
+                         hasRemote, getRemoteUrl, parseGitHubRemote, pushBranch,
+                         getBranchSyncState. All functions strip GIT_DIR / GIT_WORK_TREE
+                         from the subprocess env so they operate on the target repo rather
+                         than the orchestrator's own worktree.
+src/git/pr.ts            GitHub pull-request creation: createPullRequest() — tries gh CLI
+                         first, falls back to GitHub REST API if GITHUB_TOKEN is set.
+                         Idempotent (checks for an existing open PR before creating).
+                         Requires either `gh auth login` or GITHUB_TOKEN / GH_TOKEN env var.
 
 src/init.ts              `multiclaude init`: writes CLAUDE.md (or .cursor/rules/*.mdc),
                          .multiclaude.json, and .claude/settings.local.json in target project.
@@ -75,12 +87,47 @@ src/web/server.ts        Express web dashboard with SSE live updates on port 743
 
 prompts/orchestrator.md  System prompt injected into CLAUDE.md of target projects.
 prompts/worker.md        System prompt passed as CLI arg to each worker subprocess.
-tests/                   Vitest test suite (214 tests across 20 files).
+tests/                   Vitest test suite (644 tests across 44 files).
+                         tests/setup.ts clears GIT_DIR / GIT_WORK_TREE / GIT_CEILING_DIRECTORIES
+                         at module load so git-creating tests work when run inside a worktree.
 ```
 
 ### Git isolation model
 
 Each task gets its own git worktree in a temp directory (`/tmp/mc-<taskId>-XXXX/`) on a branch like `feature/task-slug` or `fix/task-slug`. When a worker calls `report_done`, the server merges the task branch into a per-run integration branch (`mc/run-<runId>`). The orchestrator creates a PR from that integration branch to `main` after all tasks complete.
+
+### Self-service git pipeline
+
+Four new orchestrator-scoped MCP tools let the orchestrator manage the full git → push → PR lifecycle without user intervention:
+
+| Tool | What it does |
+|------|-------------|
+| `git_status(run_id)` | Snapshots the integration branch: local/remote existence, ahead/behind counts, per-task merge state, and a `blockers[]` list of human-readable obstacles (unmerged tasks, missing remote, etc.) |
+| `push_run_branch(run_id)` | Pushes `mc/run-<runId>` to `origin`. On `non_fast_forward`, automatically fetches and merges `origin/<branch>` before retrying. |
+| `create_pr(run_id)` | Guards that all tasks are `done` and `merged_into_run`, pushes the branch, builds a PR body from each task's `DONE:` summary log, applies per-ticket `closes #N` keywords (one per issue to satisfy GitHub's syntax), and calls `createPullRequest()` in `src/git/pr.ts`. Stores `pr_url` on the run row for idempotency. |
+| `resolve_merge_conflict(task_id)` | Re-drives the merge. If conflicts remain in non-auto-resolvable files, spawns a `conflict-<taskId>` worker in a fresh worktree already in MERGE_IN_PROGRESS state (see conflict-resolution flow below). |
+
+**PR creation prerequisites (user setup):**
+Either `gh auth login` (GitHub CLI) or `GITHUB_TOKEN` / `GH_TOKEN` env var must be set before `create_pr` can open a real PR. `create_pr` will return `ok: false` with a specific `reason` and actionable `detail` string when auth is absent.
+
+### Conflict-resolution flow
+
+When `mergeWorktreeBranch` finds semantic conflicts (files that are not auto-resolvable lock files), it throws `MergeConflictError`. `handleReportDone` catches this and:
+
+1. Logs the conflict at `error` level: `Merge conflict: <branch> cannot be merged into <integBranch> — conflicted files: <files>`
+2. Sets the task to `status: 'failed'`, `failure_reason: 'merge_conflict'`, `conflicted_files: [...]`, `conflict_branch: <integBranch>`
+3. **Keeps the worktree** (does not `removeWorktree`) so the orchestrator and resolution worker can inspect the committed state.
+
+When the orchestrator calls `resolve_merge_conflict(task_id)`:
+
+1. Re-attempts `mergeWorktreeBranch`. If the re-attempt succeeds (e.g. the conflict was transient or already resolved), the task is marked `done` and `merged_into_run: true`.
+2. If the merge still conflicts on non-auto-resolvable files, `spawnConflictResolutionWorker` runs:
+   - Creates a `conflict-<taskId>` task with a detailed description listing each conflicted file.
+   - Creates a fresh worktree based on the integration branch and runs `git merge <taskBranch>` inside it, leaving the worktree in MERGE_IN_PROGRESS state with conflict markers in place.
+   - Registers an agent (`w-conflict-<taskId>`) in `spawning` state — the spawner watcher picks this up and launches a Claude subprocess with full git context.
+   - Returns `needsWorker: true` so the orchestrator knows a worker has been dispatched.
+
+The conflict worker's job: resolve each conflicted file, stage it, commit the merge, and call `report_done`. `handleReportDone` then detects `conflict_worker_for` on the task and marks the original task `done` if its branch is now an ancestor of the integration branch.
 
 ### Key data flows
 
@@ -145,6 +192,7 @@ Never kill these during development or agent tasks.
 >
 > **Allowed tools:**
 > - `multiclaude-coord` MCP tools: `plan_dag`, `get_system_status`, `spawn_worker`, `cancel_task`, `complete_task`
+> - `multiclaude-coord` git tools: `git_status`, `push_run_branch`, `create_pr`, `resolve_merge_conflict` — use these for **all** git and PR work; never use Bash for git
 > - `AskUserQuestion` — for the plan approval step (see Step 3 below)
 > - Any other MCP tools the user has configured (GitHub, Jira, Linear, Slack, etc.) — use these freely to read issues, fetch context, and understand requirements
 > - `Read` — for reading local files, specs, or design docs the user points you to
@@ -152,7 +200,7 @@ Never kill these during development or agent tasks.
 >
 > **Banned tools — never use these:**
 > - `Agent` (built-in subagent, previously called `Task`) — workers do the implementation, not you
-> - `Bash` — except for `gh` CLI commands listed above; never run build commands, scripts, or any other shell commands
+> - `Bash` — except for `gh` CLI commands listed above; never run git commands, build commands, scripts, or any other shell commands. Git work must go through the `multiclaude-coord` git tools — this keeps all repo operations server-side and prevents the orchestrator from accidentally mutating state outside its managed branches.
 > - `Write` / `Edit` — you don't create or modify files
 >
 > The distinction: **fetching context is fine, implementing is not.**
@@ -295,29 +343,15 @@ Escalating to user before proceeding.
 
 Only proceed to PR creation once all done tasks have `merged_into_run: true`.
 
-1. Use the GitHub MCP tool (`mcp__github__create_pull_request`) to open a PR:
-   - **head branch:** `mc/run-{runId}`
-   - **base branch:** `main`
-   - **title:** the run title (from `create_run`)
-   - **body:** list each completed task with its summary, e.g.:
-     ```
-     ## Tasks included
-     - **task-id-1**: summary from report_done
-     - **task-id-2**: summary from report_done
-     ```
+1. Call `create_pr(run_id)` — the tool pushes the integration branch, builds the PR body from each task's `report_done` summary, assembles the closing keywords correctly, and opens the PR against `main`.
 
-2. **Closing keywords (CRITICAL):** Append a closing line that automatically closes all referenced issues upon merge. Assemble this mechanically from the distinct `ticket` values on the run's tasks:
-   - Collect all unique issue numbers from task `ticket` fields (e.g. if tasks have `ticket: "#42"`, `"#45"`, `"#42"`, collect `["#42", "#45"]`)
-   - Build the line as: `Closes #42, closes #45` (one `closes` keyword per issue)
-   - **⚠️ The trap:** `Closes #42, #45` closes only #42 — GitHub interprets the comma-separated list as a single reference. You must repeat `closes` for each issue.
-   - **Also note:** Issue numbers in the PR title do NOT close anything — only keywords in the body work.
-   - Append the closing line to the PR body at the end, on its own line(s)
+   > **Why the tool handles closing keywords:** GitHub's closing keyword syntax is a trap — `Closes #42, #45` closes only #42, not both; you must write `Closes #42, closes #45` (one `closes` keyword per issue). The tool does this mechanically so the orchestrator never gets it wrong.
 
-3. After the PR merges, verify that each referenced issue actually closed. If any remain open, the closing keywords may not have been applied correctly — escalate to the user.
+2. The tool returns the PR URL. Share it with the user.
 
-4. Share the PR URL with the user.
+3. After the PR merges, verify that each referenced issue actually closed. If any remain open, escalate to the user.
 
-5. **Do not merge** — the user must approve the PR before merging to main.
+4. **Do not merge** — the user must approve the PR before merging to main.
 
 ---
 
@@ -405,9 +439,26 @@ When a task fails, attempt recovery before escalating. The recovery-first policy
 **Escalation phase** (only when recovery verdict isn't `recovered`):
 1. State what recovery already attempted and what was found
 2. Be specific about the decision needed — not a list of shell commands or logs for the user to debug
-3. The orchestrator must not run shell commands; recovery is handled server-side by `recover_task` and the coordination server
+3. The orchestrator must not run shell commands; recovery is handled server-side by `recover_task` and the coordination server. For git-related failures (branch not pushed, merge conflict blocking the PR, unclear branch state), use the `push_run_branch`, `resolve_merge_conflict`, or `git_status` tools before escalating — see **Git Situations** below.
 
 Example escalation: *"Task X failed with [specific error]. Recovery attempted [strategies tried]. Root cause: [what was found]. Need user input: [specific decision]."*
+
+---
+
+## Git Situations
+
+The orchestrator resolves git problems itself using MCP tools. Only escalate when a real human decision is required (auth/credentials, a genuine semantic conflict the conflict worker could not settle, or a force-push / history rewrite).
+
+| Situation | What to do |
+|-----------|-----------|
+| All tasks done — need to open PR | Call `create_pr(run_id)`. Do not use any GitHub MCP tool directly. |
+| Integration branch not pushed / push rejected | Call `push_run_branch(run_id)` first, then retry `create_pr`. |
+| A task is in `merge_conflict` status | Call `resolve_merge_conflict(task_id)` — the tool attempts an automatic resolution. If it returns `resolved`, re-spawn the task. If it returns `needs_human`, escalate with the specific conflict details. |
+| Unsure what is blocking a PR (branch behind main, dirty state, etc.) | Call `git_status(run_id)` to get a snapshot of the integration branch state before deciding next steps. |
+| Git auth failure / credentials missing | Escalate to user immediately — this requires a human action outside the system. |
+| Force-push or history rewrite needed | Escalate to user — never do this autonomously. |
+
+**Principle:** every git operation the orchestrator needs has a corresponding MCP tool. If you feel the urge to open a Bash terminal for git work, use the tool instead.
 
 ---
 
@@ -426,6 +477,10 @@ Example escalation: *"Task X failed with [specific error]. Recovery attempted [s
 | `complete_task(task_id, summary)` | Recovery only — when worker did work but died without reporting |
 | `list_projects()` | List all projects with aggregate stats (task counts, run count, last_active_at) |
 | `list_runs(project_id?)` | List runs (optionally filtered by project); each shows task counts and derived_status |
+| `git_status(run_id)` | Get a snapshot of the integration branch state — use when unsure what is blocking a PR or before retrying a push |
+| `push_run_branch(run_id)` | Push the integration branch to origin — use when branch is not yet pushed or a push was rejected |
+| `create_pr(run_id)` | Open the PR after all tasks complete — pushes branch, builds body from task summaries, applies closing keywords, returns PR URL |
+| `resolve_merge_conflict(task_id)` | Attempt automatic resolution of a merge conflict on a task branch — returns `resolved` or `needs_human` |
 
 ---
 

@@ -79,8 +79,9 @@ describe('worktree lifecycle integration', () => {
 
     // Merge log entry was written
     const mergeLog = db.prepare(
-      "SELECT message FROM logs WHERE task_id = 'task-1' AND message LIKE 'Merged%'"
+      "SELECT message FROM logs WHERE task_id = 'task-1' AND level = 'info' AND message LIKE 'Merged%'"
     ).get() as { message: string } | undefined
+    expect(mergeLog).toBeDefined()
     expect(mergeLog?.message).toContain('mc/task-1')
     expect(mergeLog?.message).toContain('mc/integration')
   })
@@ -136,7 +137,8 @@ describe('worktree lifecycle integration', () => {
     expect(conflictLog?.message).toContain('Merge conflict')
     expect(conflictLog?.message).toContain('mc/task-b')
 
-    // Worktree for task-b is removed on failure so retries can recreate it with the same branch name
-    expect(existsSync(taskB.worktree_path!)).toBe(false)
+    // Worktree for task-b is KEPT on merge conflict so the orchestrator can inspect
+    // conflicted files and spawn a conflict-resolution worker on the same branch.
+    expect(existsSync(taskB.worktree_path!)).toBe(true)
   }, 15000)
 })

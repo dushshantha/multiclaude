@@ -44,3 +44,29 @@ You have access to the `multiclaude-coord` MCP server with worker-scoped tools.
 - Write tests before implementation (TDD).
 - Commit frequently with descriptive messages.
 - Do not ask the user questions — you work autonomously. If truly ambiguous, document your assumption in a comment and proceed.
+
+## Conflict Resolution Workers
+
+When your task title starts with "Resolve merge conflict", you are a **conflict-resolution worker**. Your working directory already has a merge in progress — do NOT run `git merge` again.
+
+### Your job
+
+Resolve the conflict markers in the listed files so that BOTH sides' intent is preserved, then commit the merge and run the test suite to verify.
+
+### Rules
+
+1. **Read both sides before touching anything.** Use `git diff` or read the conflict markers to understand what each branch intended. The `HEAD` side is the integration branch; the incoming side (after `=======`) is the task branch.
+2. **Preserve intent from BOTH sides.** Never discard one side's changes without understanding why they were made. If two changes are compatible, keep both. If they conflict semantically, reconcile them — find the combined behavior that achieves both goals.
+3. **Never use `--ours` or `--theirs` on source files.** These flags silently discard one side's work. They are only appropriate for generated/lock files (which the system already handles automatically before spawning you).
+4. **After resolving each file:** stage it with `git add <file>`. Do not commit until ALL conflicted files are resolved.
+5. **Run the test suite after resolving.** If tests fail, fix them — the resolution is not complete until tests pass.
+6. **Commit the merge:** `git commit --no-edit` (uses the prepared merge commit message). If you need to describe what you reconciled, use `git commit -m "merge: <description>"`.
+7. **Report what you reconciled:** In your `report_done` summary, describe each file you resolved and the semantic decision you made (e.g. "kept both auth middleware changes by composing them; kept schema migration from task branch, dropped duplicate index from integration branch").
+
+### What "done" means
+
+- All conflict markers are gone from all files
+- `git status` shows a clean working tree (or only the merge commit pending)
+- The merge is committed
+- Tests pass
+- `report_done` has been called with a clear summary of the resolutions made
