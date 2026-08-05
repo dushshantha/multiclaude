@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildWorkerMcpConfig, buildWorkerArgs, buildWorkerEnv, writeWorkerMcpConfig } from '../../src/spawner/index.js'
+import { buildWorkerMcpConfig, buildWorkerArgs, buildWorkerEnv, buildWorkerSettings, resolveHookCommand, writeWorkerMcpConfig } from '../../src/spawner/index.js'
 import type { SpawnConfig } from '../../src/spawner/index.js'
 
 describe('spawner', () => {
@@ -86,6 +86,46 @@ describe('spawner', () => {
   it('buildWorkerEnv sets MULTICLAUDE_AGENT_ID', () => {
     const env = buildWorkerEnv('w-task-1')
     expect(env['MULTICLAUDE_AGENT_ID']).toBe('w-task-1')
+  })
+
+  it('buildWorkerEnv sets MULTICLAUDE_WORKTREE from isolation.worktreePath', () => {
+    const env = buildWorkerEnv('w-task-1', {
+      worktreePath: '/tmp/mc-task-1-abcdef',
+      gitDir: '/repos/.git/worktrees/mc-task-1-abcdef',
+    })
+    expect(env['MULTICLAUDE_WORKTREE']).toBe('/tmp/mc-task-1-abcdef')
+  })
+
+  it('buildWorkerEnv sets MULTICLAUDE_WORKTREE from opts.worktreePath when no isolation', () => {
+    const env = buildWorkerEnv('w-task-1', undefined, { worktreePath: '/tmp/mc-task-fallback' })
+    expect(env['MULTICLAUDE_WORKTREE']).toBe('/tmp/mc-task-fallback')
+  })
+
+  it('buildWorkerEnv omits MULTICLAUDE_WORKTREE when neither isolation nor opts provided', () => {
+    const saved = process.env.MULTICLAUDE_WORKTREE
+    delete process.env.MULTICLAUDE_WORKTREE
+    try {
+      const env = buildWorkerEnv('w-task-1')
+      expect(env['MULTICLAUDE_WORKTREE']).toBeUndefined()
+    } finally {
+      if (saved !== undefined) process.env.MULTICLAUDE_WORKTREE = saved
+    }
+  })
+
+  it('buildWorkerEnv sets MULTICLAUDE_TASK_ID from opts.taskId', () => {
+    const env = buildWorkerEnv('w-task-1', undefined, { taskId: 'my-task-123' })
+    expect(env['MULTICLAUDE_TASK_ID']).toBe('my-task-123')
+  })
+
+  it('buildWorkerEnv omits MULTICLAUDE_TASK_ID when not provided', () => {
+    const saved = process.env.MULTICLAUDE_TASK_ID
+    delete process.env.MULTICLAUDE_TASK_ID
+    try {
+      const env = buildWorkerEnv('w-task-1')
+      expect(env['MULTICLAUDE_TASK_ID']).toBeUndefined()
+    } finally {
+      if (saved !== undefined) process.env.MULTICLAUDE_TASK_ID = saved
+    }
   })
 
   it('buildWorkerArgs passes --model with correct model ID for sonnet (default)', () => {
@@ -234,5 +274,82 @@ describe('spawner', () => {
     const args = buildWorkerArgs(cfg)
     expect(args).toContain('--effort')
     expect(args[args.indexOf('--effort') + 1]).toBe('xhigh')
+  })
+})
+
+describe('buildWorkerSettings', () => {
+  it('scopes Write permission to the worktree path', () => {
+    const settings = buildWorkerSettings({ worktreePath: '/tmp/mc-test-worktree' }) as any
+    expect(settings.permissions.allow).toContain('Write(/tmp/mc-test-worktree/**)')
+  })
+
+  it('scopes Edit permission to the worktree path', () => {
+    const settings = buildWorkerSettings({ worktreePath: '/tmp/mc-test-worktree' }) as any
+    expect(settings.permissions.allow).toContain('Edit(/tmp/mc-test-worktree/**)')
+  })
+
+  it('keeps Read(*) as unrestricted (hook enforces boundary)', () => {
+    const settings = buildWorkerSettings({ worktreePath: '/tmp/mc-test-worktree' }) as any
+    expect(settings.permissions.allow).toContain('Read(*)')
+  })
+
+  it('keeps Bash(*) as unrestricted (cannot scope by path via globs)', () => {
+    const settings = buildWorkerSettings({ worktreePath: '/tmp/mc-test-worktree' }) as any
+    expect(settings.permissions.allow).toContain('Bash(*)')
+  })
+
+  it('does not include blanket Write(*) or Edit(*)', () => {
+    const settings = buildWorkerSettings({ worktreePath: '/tmp/mc-test-worktree' }) as any
+    expect(settings.permissions.allow).not.toContain('Write(*)')
+    expect(settings.permissions.allow).not.toContain('Edit(*)')
+  })
+
+  it('includes all required worker MCP tools', () => {
+    const settings = buildWorkerSettings({ worktreePath: '/tmp/mc-test-worktree' }) as any
+    expect(settings.permissions.allow).toContain('mcp__multiclaude-worker__get_my_task')
+    expect(settings.permissions.allow).toContain('mcp__multiclaude-worker__report_progress')
+    expect(settings.permissions.allow).toContain('mcp__multiclaude-worker__report_done')
+    expect(settings.permissions.allow).toContain('mcp__multiclaude-worker__report_blocked')
+  })
+
+  it('adds deny rules for repoPath when provided', () => {
+    const settings = buildWorkerSettings({
+      worktreePath: '/tmp/mc-test-worktree',
+      repoPath: '/Users/alice/myproject',
+    }) as any
+    expect(settings.permissions.deny).toBeDefined()
+    expect(settings.permissions.deny).toContain('Write(/Users/alice/myproject/**)')
+    expect(settings.permissions.deny).toContain('Edit(/Users/alice/myproject/**)')
+  })
+
+  it('omits deny key when no repoPath is provided', () => {
+    const settings = buildWorkerSettings({ worktreePath: '/tmp/mc-test-worktree' }) as any
+    expect(settings.permissions.deny).toBeUndefined()
+  })
+
+  it('registers a PreToolUse hook entry', () => {
+    const settings = buildWorkerSettings({ worktreePath: '/tmp/mc-test-worktree' }) as any
+    expect(settings.hooks).toBeDefined()
+    expect(settings.hooks.PreToolUse).toBeDefined()
+    expect(Array.isArray(settings.hooks.PreToolUse)).toBe(true)
+    expect(settings.hooks.PreToolUse.length).toBeGreaterThan(0)
+    const entry = settings.hooks.PreToolUse[0]
+    expect(entry.matcher).toBe('.*')
+    expect(entry.hooks[0].type).toBe('command')
+    expect(typeof entry.hooks[0].command).toBe('string')
+    expect(entry.hooks[0].command.length).toBeGreaterThan(0)
+  })
+})
+
+describe('resolveHookCommand', () => {
+  it('returns a non-empty string', () => {
+    const cmd = resolveHookCommand()
+    expect(typeof cmd).toBe('string')
+    expect(cmd.length).toBeGreaterThan(0)
+  })
+
+  it('command references the worktree-guard-hook file', () => {
+    const cmd = resolveHookCommand()
+    expect(cmd).toContain('worktree-guard-hook')
   })
 })

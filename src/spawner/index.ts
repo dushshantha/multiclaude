@@ -8,6 +8,19 @@ import { readWorktreeGitDir } from '../git/worktree.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
+/**
+ * Returns the shell command to invoke the boundary-guard PreToolUse hook.
+ * Prefers the compiled .js (production: dist/spawner/) over tsx source (development).
+ */
+export function resolveHookCommand(): string {
+  const jsPath = join(__dirname, 'worktree-guard-hook.js')
+  if (existsSync(jsPath)) {
+    return `node ${JSON.stringify(jsPath)}`
+  }
+  const tsPath = join(__dirname, 'worktree-guard-hook.ts')
+  return `npx tsx ${JSON.stringify(tsPath)}`
+}
+
 const MODEL_IDS: Record<string, string> = {
   haiku: 'claude-haiku-4-5-20251001',
   sonnet: 'claude-sonnet-4-6',
@@ -24,6 +37,8 @@ export interface SpawnConfig {
   worktreePath: string
   mcpConfigPath: string
   openTerminals?: boolean
+  /** Absolute path to the parent project repo — used to generate deny rules. */
+  repoPath?: string
 }
 
 export interface WorkerMcpConfig {
@@ -48,7 +63,14 @@ export interface WorktreeIsolation {
   gitDir: string
 }
 
-export function buildWorkerEnv(agentId: string, isolation?: WorktreeIsolation): NodeJS.ProcessEnv {
+export interface WorkerEnvOpts {
+  /** Task ID — forwarded as MULTICLAUDE_TASK_ID for the boundary-guard hook. */
+  taskId?: string
+  /** Worktree root — forwarded as MULTICLAUDE_WORKTREE when isolation is unavailable. */
+  worktreePath?: string
+}
+
+export function buildWorkerEnv(agentId: string, isolation?: WorktreeIsolation, opts?: WorkerEnvOpts): NodeJS.ProcessEnv {
   const env: Record<string, string | undefined> = { ...process.env, MULTICLAUDE_AGENT_ID: agentId }
   delete env['CLAUDECODE']
   if (isolation) {
@@ -56,6 +78,10 @@ export function buildWorkerEnv(agentId: string, isolation?: WorktreeIsolation): 
     env.GIT_WORK_TREE = isolation.worktreePath
     env.GIT_CEILING_DIRECTORIES = dirname(isolation.worktreePath)
   }
+  // MULTICLAUDE_WORKTREE is inherited by the boundary-guard PreToolUse hook subprocess.
+  const worktreePath = isolation?.worktreePath ?? opts?.worktreePath
+  if (worktreePath) env.MULTICLAUDE_WORKTREE = worktreePath
+  if (opts?.taskId) env.MULTICLAUDE_TASK_ID = opts.taskId
   return env
 }
 
@@ -120,6 +146,63 @@ export function buildWorkerArgs(cfg: SpawnConfig): string[] {
   ]
 }
 
+/**
+ * Builds the settings.local.json content for a worker's .claude/ directory.
+ *
+ * Write and Edit permissions are scoped to the worktree path so Claude Code's
+ * built-in permission layer blocks obvious out-of-tree writes immediately.
+ * The boundary-guard PreToolUse hook catches traversal and symlink escape cases
+ * that glob rules cannot express.
+ *
+ * Bash(*) cannot be path-constrained by glob patterns in Claude Code's
+ * permission system — there is no Bash(path) equivalent. Isolation relies on
+ * the worktree-scoped cwd, the GIT_DIR/GIT_WORK_TREE env vars in buildWorkerEnv,
+ * and the hook (which does not intercept Bash because it cannot determine the
+ * effective filesystem paths from the command string alone).
+ */
+export function buildWorkerSettings(cfg: {
+  worktreePath: string
+  repoPath?: string
+}): object {
+  const hookCommand = resolveHookCommand()
+
+  const allow = [
+    // Bash cannot be scoped to a path via Claude Code's glob permission format.
+    // cwd isolation (worktree as cwd) and GIT_DIR env vars limit its blast radius.
+    'Bash(*)',
+    `Write(${cfg.worktreePath}/**)`,
+    `Edit(${cfg.worktreePath}/**)`,
+    'Read(*)',
+    'mcp__multiclaude-worker__get_my_task',
+    'mcp__multiclaude-worker__report_progress',
+    'mcp__multiclaude-worker__report_done',
+    'mcp__multiclaude-worker__report_blocked',
+  ]
+
+  // Explicitly deny writes to the parent project repo so even if a glob rule
+  // were widened in the future, the deny takes precedence.
+  const deny: string[] = []
+  if (cfg.repoPath) {
+    deny.push(`Write(${cfg.repoPath}/**)`, `Edit(${cfg.repoPath}/**)`)
+  }
+
+  return {
+    permissions: {
+      allow,
+      ...(deny.length > 0 && { deny }),
+    },
+    hooks: {
+      PreToolUse: [
+        {
+          // Match every tool — the hook only acts on Write/Edit/Read/NotebookEdit paths.
+          matcher: '.*',
+          hooks: [{ type: 'command', command: hookCommand }],
+        },
+      ],
+    },
+  }
+}
+
 export function workerLogPath(agentId: string): string {
   return join(tmpdir(), `mc-worker-${agentId}.log`)
 }
@@ -133,14 +216,7 @@ export function spawnWorker(cfg: SpawnConfig): ChildProcess {
     mkdirSync(claudeDir, { recursive: true })
     writeFileSync(
       join(claudeDir, 'settings.local.json'),
-      JSON.stringify({ permissions: { allow:
-        ['Bash(*)', 'Write(*)', 'Edit(*)', 'Read(*)',
-          'mcp__multiclaude-worker__get_my_task',
-          'mcp__multiclaude-worker__report_progress',
-          'mcp__multiclaude-worker__report_done',
-          'mcp__multiclaude-worker__report_blocked'
-        ]
-       } }, null, 2)
+      JSON.stringify(buildWorkerSettings({ worktreePath: cfg.worktreePath, repoPath: cfg.repoPath }), null, 2)
     )
   } catch (err: unknown) {
     const detail = err instanceof Error ? err.message : String(err)
@@ -151,7 +227,7 @@ export function spawnWorker(cfg: SpawnConfig): ChildProcess {
   return spawn('claude', buildWorkerArgs(cfg), {
     cwd: cfg.worktreePath,
     stdio: ['ignore', logFd, logFd],
-    env: buildWorkerEnv(cfg.agentId, isolation),
+    env: buildWorkerEnv(cfg.agentId, isolation, { taskId: cfg.taskId, worktreePath: cfg.worktreePath }),
   })
 }
 

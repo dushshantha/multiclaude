@@ -4,7 +4,7 @@ import { join } from 'path'
 
 import type Database from 'better-sqlite3'
 import type { SpawnConfig } from './index.js'
-import { buildWorkerArgs, buildWorkerEnv } from './index.js'
+import { buildWorkerArgs, buildWorkerEnv, buildWorkerSettings } from './index.js'
 import { readWorktreeGitDir } from '../git/worktree.js'
 import type { WorktreeIsolation } from './index.js'
 import type { WorkerHandle } from './backend.js'
@@ -369,7 +369,7 @@ export function writeLaunchScript(cfg: SpawnConfig): string {
     const gitDir = readWorktreeGitDir(cfg.worktreePath)
     isolation = { worktreePath: cfg.worktreePath, gitDir }
   } catch { /* not a worktree — skip isolation */ }
-  const env = buildWorkerEnv(cfg.agentId, isolation)
+  const env = buildWorkerEnv(cfg.agentId, isolation, { taskId: cfg.taskId, worktreePath: cfg.worktreePath })
 
   const lines: string[] = ['#!/usr/bin/env bash', 'set -e', '']
   for (const [key, val] of Object.entries(env)) {
@@ -405,13 +405,7 @@ export function spawnTmuxWorker(cfg: SpawnConfig): WorkerHandle {
     mkdirSync(claudeDir, { recursive: true })
     writeFileSync(
       join(claudeDir, 'settings.local.json'),
-      JSON.stringify({ permissions: { allow: [
-        'Bash(*)', 'Write(*)', 'Edit(*)', 'Read(*)',
-        'mcp__multiclaude-worker__get_my_task',
-        'mcp__multiclaude-worker__report_progress',
-        'mcp__multiclaude-worker__report_done',
-        'mcp__multiclaude-worker__report_blocked',
-      ] } }, null, 2)
+      JSON.stringify(buildWorkerSettings({ worktreePath: cfg.worktreePath, repoPath: cfg.repoPath }), null, 2)
     )
   } catch (err: unknown) {
     const detail = err instanceof Error ? err.message : String(err)
