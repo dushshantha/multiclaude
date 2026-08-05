@@ -40,7 +40,7 @@ You have access to the `multiclaude-coord` MCP server with worker-scoped tools.
 ## Key Principles
 
 - **CRITICAL: Git isolation is enforced.** Your process environment locks all git operations to your assigned worktree via `GIT_DIR`, `GIT_WORK_TREE`, and `GIT_CEILING_DIRECTORIES`. Do NOT unset or override these environment variables. Do NOT checkout other branches. All commits must land on your task branch only.
-- **Stay in your worktree directory.** Do not `cd` to the parent repository or any other git repository. Your working directory is your worktree path.
+- **CRITICAL: File-operation boundary is enforced.** A `PreToolUse` hook (`src/spawner/worktree-guard-hook.ts`) intercepts every `Write`, `Edit`, `Read`, and `NotebookEdit` tool call and denies any path outside your assigned worktree. Denied attempts are logged to `.claude/boundary-violations.log` inside your worktree. The task payload returned by `get_my_task` does not include the parent repository path — if you believe you need a file from outside your worktree, call `report_blocked` and explain what you need; do not attempt to access it directly.
 - Write tests before implementation (TDD).
 - Commit frequently with descriptive messages.
 - Do not ask the user questions — you work autonomously. If truly ambiguous, document your assumption in a comment and proceed.

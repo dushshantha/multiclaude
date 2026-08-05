@@ -27,6 +27,27 @@ describe('worker tools', () => {
     expect(result.title).toBe('JWT auth')
   })
 
+  it('get_my_task includes worktree_path in the response', () => {
+    updateTask(db, 'task-1', { worktree_path: '/tmp/mc-task-1-abc' })
+    const result = handleGetMyTask(db, 'w-1')
+    expect(result.worktree_path).toBe('/tmp/mc-task-1-abc')
+  })
+
+  it('get_my_task does not expose repo_path', () => {
+    updateTask(db, 'task-1', { repo_path: '/Users/marcus/Developer/MyProject' })
+    const result = handleGetMyTask(db, 'w-1')
+    expect('repo_path' in result).toBe(false)
+  })
+
+  it('get_my_task does not expose any path outside the worktree', () => {
+    const mainRepoPath = '/Users/marcus/Developer/MyProject'
+    updateTask(db, 'task-1', { repo_path: mainRepoPath, worktree_path: '/tmp/mc-task-1-abc' })
+    const result = handleGetMyTask(db, 'w-1')
+    const json = JSON.stringify(result)
+    expect(json).not.toContain(mainRepoPath)
+    expect(result.worktree_path).toBe('/tmp/mc-task-1-abc')
+  })
+
   it('report_progress writes a log entry', () => {
     handleReportProgress(db, 'w-1', 'task-1', 'running tests')
     const log = db.prepare('SELECT * FROM logs WHERE task_id = ?').get('task-1') as { message: string }
