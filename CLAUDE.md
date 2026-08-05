@@ -96,6 +96,16 @@ tests/                   Vitest test suite (644 tests across 44 files).
 
 Each task gets its own git worktree in a temp directory (`/tmp/mc-<taskId>-XXXX/`) on a branch like `feature/task-slug` or `fix/task-slug`. When a worker calls `report_done`, the server merges the task branch into a per-run integration branch (`mc/run-<runId>`). The orchestrator creates a PR from that integration branch to `main` after all tasks complete.
 
+### File-operation boundary
+
+Worker agents' file operations are confined to their worktree. The boundary is enforced by the **worktree-guard** module (`src/spawner/worktree-guard.ts`) via a PreToolUse hook (`src/spawner/worktree-guard-hook.ts`) registered in each worker's `.claude/settings.local.json` at spawn time.
+
+**How it works:** The hook intercepts Write, Edit, Read, and NotebookEdit tool calls, checks whether the target path falls within the assigned worktree root (using `isPathInWorktree()` which handles relative paths, `..` traversal, symlinks, and case-insensitive filesystems), and denies the operation if the path is outside the boundary. Denials are logged to `.claude/boundary-violations.log` inside the worktree.
+
+**First line of defense:** Write and Edit permissions in `settings.local.json` are also scoped to the worktree root via glob patterns (`Write(<worktree>/**)`, `Edit(<worktree>/**)`), blocking obvious out-of-tree writes. The hook catches traversal and symlink escape cases that glob rules cannot express.
+
+**When a worker needs content outside its worktree:** The worker should call `report_blocked` with the file path and reason. The orchestrator can then make a decision: fetch the content via a separate worker or copy the needed file into the worktree before retrying.
+
 ### Self-service git pipeline
 
 Four new orchestrator-scoped MCP tools let the orchestrator manage the full git → push → PR lifecycle without user intervention:
