@@ -52,7 +52,13 @@ src/server/state/        SQLite state via better-sqlite3 (WAL mode).
 
 src/spawner/index.ts     spawnWorker(): launches `claude` subprocess with --mcp-config,
                          --dangerously-skip-permissions, and a prompt injected via CLI arg.
-                         Writes .claude/settings.local.json into the worktree before spawning.
+                         Writes .claude/settings.local.json into the worktree before spawning
+                         (worktree-scoped Write/Edit permissions + PreToolUse boundary hook).
+src/spawner/worktree-guard.ts      isPathInWorktree(): symlink-aware, case-insensitive path
+                                   containment check used by the PreToolUse hook.
+src/spawner/worktree-guard-hook.ts PreToolUse hook entrypoint (node script). Denies Write/Edit/
+                                   Read/NotebookEdit calls that target paths outside the worktree;
+                                   logs violations to .claude/boundary-violations.log.
 src/spawner/cursor.ts    Cursor worker variant — uses node-pty for PTY requirement.
 src/spawner/tmux.ts      Tmux worker backend: ensureTmuxSession, createTmuxWindow, spawnTmuxWorker,
                          captureTmuxPane, sendToPane (with composer-submit robustness), and
@@ -95,6 +101,22 @@ tests/                   Vitest test suite (644 tests across 44 files).
 ### Git isolation model
 
 Each task gets its own git worktree in a temp directory (`/tmp/mc-<taskId>-XXXX/`) on a branch like `feature/task-slug` or `fix/task-slug`. When a worker calls `report_done`, the server merges the task branch into a per-run integration branch (`mc/run-<runId>`). The orchestrator creates a PR from that integration branch to `main` after all tasks complete.
+
+### File-operation boundary
+
+Each worker's `Write` and `Edit` permissions are scoped to its own worktree path in `.claude/settings.local.json` (built by `buildWorkerSettings` in `src/spawner/index.ts`). A `PreToolUse` hook — `src/spawner/worktree-guard-hook.ts`, backed by `src/spawner/worktree-guard.ts` — intercepts every `Write`, `Edit`, `Read`, and `NotebookEdit` tool call and denies any path outside the assigned worktree (exit code 2). The hook resolves symlinks on both sides (handling `/tmp` → `/private/tmp` on macOS) and performs case-insensitive comparison, so path traversal and symlink escape attempts are caught.
+
+The parent repository path (`repo_path`) is withheld from the `WorkerTaskView` returned by `get_my_task`, so workers have no in-band way to learn the path. If `repoPath` is known at spawn time, an explicit `deny` rule for that path is added alongside the `allow` rules.
+
+The hook is registered in all three worker launch paths:
+
+| Launch path | Where settings are written |
+|-------------|---------------------------|
+| `spawnWorker` (`src/spawner/index.ts`) | `.claude/settings.local.json` in the worktree before `spawn()` |
+| `spawnTmuxWorker` (`src/spawner/tmux.ts`) | same, before the tmux window is created |
+| `spawnCursorWorker` (`src/spawner/cursor.ts`) | same; Cursor does not currently read this file, but the file is present for defence-in-depth |
+
+**Where violations surface:** Denied attempts are appended as JSON lines to `.claude/boundary-violations.log` inside the worker's worktree (`{ timestamp, tool, path, taskId }`). The worker receives a structured error message explaining which path was denied and why.
 
 ### Self-service git pipeline
 
