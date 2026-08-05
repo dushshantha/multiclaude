@@ -8,7 +8,16 @@ import { removeWorktree } from '../../git/worktree.js'
 import { calculateCost } from '../cost.js'
 import { killTmuxWindow } from '../../spawner/tmux.js'
 
-export function handleGetMyTask(db: Database.Database, agentId: string): Task {
+export type WorkerTaskView = Pick<
+  Task,
+  | 'id' | 'title' | 'description' | 'status' | 'model' | 'effort'
+  | 'retry_count' | 'max_retries' | 'worktree_path' | 'branch' | 'head_sha'
+  | 'agent_id' | 'started_at' | 'run_id' | 'ticket'
+  | 'failure_reason' | 'failure_detail' | 'conflict_worker_for'
+  | 'created_at' | 'updated_at'
+>
+
+export function handleGetMyTask(db: Database.Database, agentId: string): WorkerTaskView {
   const task = db.prepare(
     "SELECT * FROM tasks WHERE agent_id = ? AND status = 'in_progress'"
   ).get(agentId) as Task | undefined
@@ -17,7 +26,28 @@ export function handleGetMyTask(db: Database.Database, agentId: string): Task {
   // Mark agent as running now that it has acknowledged its task
   updateAgent(db, agentId, { status: 'running' })
 
-  return task
+  return {
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    status: task.status,
+    model: task.model,
+    effort: task.effort,
+    retry_count: task.retry_count,
+    max_retries: task.max_retries,
+    worktree_path: task.worktree_path,
+    branch: task.branch,
+    head_sha: task.head_sha,
+    agent_id: task.agent_id,
+    started_at: task.started_at,
+    run_id: task.run_id,
+    ticket: task.ticket,
+    failure_reason: task.failure_reason,
+    failure_detail: task.failure_detail,
+    conflict_worker_for: task.conflict_worker_for,
+    created_at: task.created_at,
+    updated_at: task.updated_at,
+  }
 }
 
 export function handleReportProgress(
