@@ -4,7 +4,7 @@ import { writeFileSync, mkdirSync, appendFileSync } from 'fs'
 import { join } from 'path'
 
 import type { SpawnConfig } from './index.js'
-import { workerLogPath } from './index.js'
+import { workerLogPath, buildWorkerSettings } from './index.js'
 
 // Cursor MCP config format (written to <worktree>/.cursor/mcp.json)
 export interface CursorMcpConfig {
@@ -122,6 +122,16 @@ export function spawnCursorWorker(cfg: SpawnConfig & { serverPort: number }): IP
   // Write MCP config and rules into the worktree before starting
   writeCursorWorkerMcpConfig({ serverPort: cfg.serverPort, worktreePath: cfg.worktreePath })
   writeCursorWorkerRules(cfg)
+
+  // Write .claude/settings.local.json with scoped permissions and the boundary-guard
+  // hook. Cursor does not currently read this file, but defence-in-depth means it
+  // is present if Claude Code is ever opened in the same worktree.
+  const claudeDir = join(cfg.worktreePath, '.claude')
+  mkdirSync(claudeDir, { recursive: true })
+  writeFileSync(
+    join(claudeDir, 'settings.local.json'),
+    JSON.stringify(buildWorkerSettings({ worktreePath: cfg.worktreePath, repoPath: cfg.repoPath }), null, 2)
+  )
 
   const logPath = workerLogPath(cfg.agentId)
   const args = buildCursorWorkerArgs()

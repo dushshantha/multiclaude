@@ -218,6 +218,7 @@ function startSpawnerWatcher(
         worktreePath: agent.cwd,
         mcpConfigPath,
         openTerminals,
+        repoPath: task.repo_path ?? undefined,
       }
 
       let handle
@@ -350,6 +351,25 @@ function startSpawnerWatcher(
             db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
               agent.task_id, 'warn', `[claude-cli] ${warning}`
             )
+          }
+          // Surface boundary violations so the operator sees them via normal status tools.
+          if (agent.cwd) {
+            const violationsPath = join(agent.cwd, '.claude', 'boundary-violations.log')
+            if (existsSync(violationsPath)) {
+              try {
+                const lines = readFileSync(violationsPath, 'utf8').trim().split('\n')
+                for (const line of lines) {
+                  if (!line.trim()) continue
+                  try {
+                    const entry = JSON.parse(line) as { tool?: string; path?: string }
+                    db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+                      agent.task_id, 'error',
+                      `[boundary-violation] ${entry.tool ?? 'unknown'} attempted to access "${entry.path ?? '?'}" outside worktree`
+                    )
+                  } catch { /* skip malformed violation entries */ }
+                }
+              } catch { /* log read failure is non-fatal */ }
+            }
           }
         }
       })
