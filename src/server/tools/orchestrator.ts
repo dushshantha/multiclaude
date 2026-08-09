@@ -9,7 +9,7 @@ import { upsertProject, listProjects } from '../state/projects.js'
 import { createRun, getRun, listRunsWithStats, updateRun, RunWithStats } from '../state/runs.js'
 import { createWorktree, preflightReconcile, isProtectedBranch, removeWorktree } from '../../git/worktree.js'
 import { killTmuxWindow, reapStaleWindows, ensureTmuxSession } from '../../spawner/tmux.js'
-import { hasRemote, getRemoteUrl, parseGitHubRemote, pushBranch, getBranchSyncState } from '../../git/ops.js'
+import { hasRemote, getRemoteUrl, parseGitHubRemote, pushBranch, getBranchSyncState, isMainCheckout } from '../../git/ops.js'
 import type { PushResult } from '../../git/ops.js'
 import { createPullRequest } from '../../git/pr.js'
 import type { PrResult } from '../../git/pr.js'
@@ -255,21 +255,35 @@ export async function handleSpawnWorker(
 
   let agentCwd = opts.cwd
   if (opts.cwd) {
-    upsertProject(db, { name: path.basename(opts.cwd), cwd: opts.cwd })
-    // Save repo_path before worktree creation so retry loop can find it even if creation fails.
-    updateTask(db, taskId, { repo_path: opts.cwd })
+    const isMain = await isMainCheckout(opts.cwd)
+    let repoPath: string
+    if (isMain) {
+      repoPath = opts.cwd
+      upsertProject(db, { name: path.basename(opts.cwd), cwd: opts.cwd })
+      // Save repo_path before worktree creation so retry loop can find it even if creation fails.
+      updateTask(db, taskId, { repo_path: opts.cwd })
+    } else {
+      // opts.cwd is a linked worktree (or non-repo dir) — do NOT overwrite an existing repo_path.
+      if (task?.repo_path) {
+        repoPath = task.repo_path
+      } else {
+        const detail = `cwd '${opts.cwd}' is not a main git checkout and task has no existing repo_path`
+        updateTask(db, taskId, { status: 'failed', failure_reason: 'repo_path_invalid', failure_detail: detail })
+        return { ok: false, error: `Failed to spawn task ${taskId}: ${detail}` }
+      }
+    }
     try {
       let baseBranch: string | undefined
       if (task?.run_id) {
         const runBranch = `mc/run-${task.run_id}`
-        const git = simpleGit(opts.cwd)
+        const git = simpleGit(repoPath)
         const branches = await git.branchLocal()
         if (branches.all.includes(runBranch)) {
           baseBranch = runBranch
         }
       }
-      const info = await createWorktree(opts.cwd, taskId, undefined, baseBranch)
-      updateTask(db, taskId, { worktree_path: info.path, branch: info.branch, head_sha: info.headSha, repo_path: opts.cwd })
+      const info = await createWorktree(repoPath, taskId, undefined, baseBranch)
+      updateTask(db, taskId, { worktree_path: info.path, branch: info.branch, head_sha: info.headSha, repo_path: repoPath })
       agentCwd = info.path
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
