@@ -134,6 +134,10 @@ function startSpawnerWatcher(
               void handleSpawnWorker(db, task.id, recoveryAgentId, { cwd: retryCwd }).then(spawnResult => {
                 if (!spawnResult.ok) {
                   console.error(`[spawner] Failed to respawn after recovery for task ${task.id}: ${spawnResult.error}`)
+                  db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+                    task.id, 'error',
+                    `recovery_respawn_failed: ${spawnResult.error}`
+                  )
                   updateTask(db, task.id, { status: 'failed' })
                 }
                 // Remove the key so a subsequent failure gets a fresh recovery attempt.
@@ -142,6 +146,10 @@ function startSpawnerWatcher(
             } else {
               // Needs human or unrecoverable — task already exhausted in applyRecoveryOutcome.
               console.warn(`[spawner] Task ${task.id} recovery verdict: ${result.verdict} — ${result.reason ?? 'no details'}`)
+              db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+                task.id, 'info',
+                `Recovery verdict: ${result.verdict} — ${result.reason ?? 'no details'}`
+              )
               retried.delete(retryKey)
             }
           })
@@ -189,6 +197,10 @@ function startSpawnerWatcher(
       void handleSpawnWorker(db, task.id, newAgentId, { cwd: retryCwd }).then(result => {
         if (!result.ok) {
           console.error(`[spawner] Failed to register retry worker for task ${task.id}: ${result.error}`)
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            task.id, 'error',
+            `retry_spawn_failed: ${result.error}`
+          )
           // Keep retry_count at retryAttempt (already written) so the next retry key
           // advances. Reverting to task.retry_count caused infinite loops because the
           // retried set was cleared while retry_count stayed at 0.
