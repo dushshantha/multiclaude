@@ -10,8 +10,8 @@ import { getTask, updateTask, listTasks } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
 import { handleSpawnWorker, handleRecoverTask } from './server/tools/orchestrator.js'
 import { shouldAttemptRecovery, applyRecoveryOutcome, MAX_RECOVERY_ATTEMPTS } from './spawner/auto-recovery.js'
-import { checkStuckWorkers, AGENT_NEVER_STARTED_REASON } from './spawner/stuck-watcher.js'
-import { killTmuxWindow, getChildProcessPid, reapOrphanWindows } from './spawner/tmux.js'
+import { checkStuckWorkers, startVerifyAgentStarted } from './spawner/stuck-watcher.js'
+import { killTmuxWindow, reapOrphanWindows } from './spawner/tmux.js'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
@@ -249,58 +249,10 @@ function startSpawnerWatcher(
       }
 
       // For tmux workers: verify the agent process actually started inside the pane.
-      // The pane shell sends keys but Enter may not land; the pid recorded above is
-      // the pane's shell, not claude. Poll asynchronously so we don't block the
-      // event loop. If no child process appears within ~4s the agent never started.
+      // Delegates to startVerifyAgentStarted in stuck-watcher.ts which polls for a
+      // child process of the pane shell and checks the busy footer before failing.
       if (handle.tmuxPane !== undefined && handle.pid !== undefined) {
-        const panePid = handle.pid
-        const capturedAgentId = agent.id
-        const capturedTaskId = agent.task_id!
-        const capturedPane = handle.tmuxPane
-
-        let verifyAttempts = 0
-        const maxVerifyAttempts = 5
-        const verifyIntervalMs = 800
-
-        const verifyAgentStarted = () => {
-          // If the agent has already exited or been marked (by onExit/onError), stop.
-          const agentRow = db.prepare('SELECT status FROM agents WHERE id = ?')
-            .get(capturedAgentId) as { status: string } | undefined
-          if (agentRow?.status !== 'spawning') return
-
-          const childPid = getChildProcessPid(panePid)
-
-          if (childPid !== undefined) {
-            // Agent process found — record the actual agent pid, not the shell
-            updateAgent(db, capturedAgentId, { pid: childPid })
-            return
-          }
-
-          verifyAttempts++
-          if (verifyAttempts < maxVerifyAttempts) {
-            setTimeout(verifyAgentStarted, verifyIntervalMs)
-            return
-          }
-
-          // All attempts exhausted — agent process never started
-          const current = db.prepare('SELECT status FROM agents WHERE id = ?')
-            .get(capturedAgentId) as { status: string } | undefined
-          if (current?.status !== 'spawning') return  // already handled
-
-          console.warn(`[spawner] ${AGENT_NEVER_STARTED_REASON} for agent ${capturedAgentId}`)
-          updateAgent(db, capturedAgentId, { status: 'failed' })
-          const t = getTask(db, capturedTaskId)
-          if (t && t.status !== 'done' && t.status !== 'failed') {
-            updateTask(db, capturedTaskId, { status: 'failed' })
-          }
-          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
-            capturedTaskId, 'error', AGENT_NEVER_STARTED_REASON
-          )
-          killTmuxWindow(capturedPane)
-        }
-
-        // Give the tmux send-keys a moment to execute before first check
-        setTimeout(verifyAgentStarted, 2000)
+        startVerifyAgentStarted(db, handle.pid, agent.id, agent.task_id!, handle.tmuxPane)
       }
 
       if (openTerminals) {
