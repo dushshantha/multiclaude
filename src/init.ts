@@ -5,21 +5,14 @@ import { writeConfig } from './config.js'
 import type { WorkerRuntime } from './config.js'
 import { checkIsGitRepo, getRemoteUrl, parseGitHubRemote } from './git/ops.js'
 import { isGhAvailable, isGhAuthenticated } from './git/pr.js'
+import { ORCHESTRATOR_TOOL_NAMES } from './server/tool-names.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 export const MULTICLAUDE_PERMISSIONS = [
-  // Orchestrator tools — accessed via user-level 'multiclaude-coord' MCP server
-  'mcp__multiclaude-coord__get_system_status',
-  'mcp__multiclaude-coord__wait_for_event',
-  'mcp__multiclaude-coord__plan_dag',
-  'mcp__multiclaude-coord__spawn_worker',
-  'mcp__multiclaude-coord__cancel_task',
-  'mcp__multiclaude-coord__complete_task',
-  'mcp__multiclaude-coord__create_run',
-  'mcp__multiclaude-coord__recover_task',
-  'mcp__multiclaude-coord__list_projects',
-  'mcp__multiclaude-coord__list_runs',
+  // Orchestrator tools — derived from ORCHESTRATOR_TOOL_NAMES so this list
+  // stays in sync with the server registration automatically.
+  ...ORCHESTRATOR_TOOL_NAMES.map(n => `mcp__multiclaude-coord__${n}`),
   // Worker tools — accessed via 'multiclaude-worker' MCP server (injected via --mcp-config)
   'mcp__multiclaude-worker__get_my_task',
   'mcp__multiclaude-worker__report_progress',
