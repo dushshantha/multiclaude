@@ -6,36 +6,30 @@ import { handleReportDone } from '../../src/server/tools/worker.js'
 import { createWorktree, removeWorktree } from '../../src/git/worktree.js'
 import { ensureIntegrationBranch } from '../../src/git/merge.js'
 import { execSync } from 'child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { writeFileSync } from 'fs'
 import { join } from 'path'
 import type Database from 'better-sqlite3'
-
-function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'mc-empty-branch-test-'))
-  execSync('git init', { cwd: dir })
-  execSync('git config user.email "test@test.com"', { cwd: dir })
-  execSync('git config user.name "Test"', { cwd: dir })
-  execSync('echo "init" > README.md && git add . && git commit -m "init"', { cwd: dir })
-  return dir
-}
+import { useTempDir } from '../helpers/temp.js'
 
 describe('empty branch detection', () => {
+  const tmp = useTempDir()
   let db: Database.Database
   let repoPath: string
 
   beforeEach(() => {
     db = createDb(':memory:')
-    repoPath = makeRepo()
+    repoPath = tmp.repo('mc-empty-branch-test-')
   })
 
   afterEach(() => {
     closeDb(db)
-    rmSync(repoPath, { recursive: true, force: true })
   })
 
   it('marks task failed when task branch has no commits', async () => {
     const info = await createWorktree(repoPath, 'task-empty', 'feat: empty task')
+    // handleReportDone removes the worktree on zero-commit detection, but register
+    // it for afterEach cleanup as a safety net in case of unexpected test failure.
+    tmp.trackWorktree(info, repoPath)
 
     createTask(db, { id: 'task-empty', title: 'Empty task' })
     updateTask(db, 'task-empty', {
@@ -64,6 +58,7 @@ describe('empty branch detection', () => {
   it('marks task done and merges when task branch has commits', async () => {
     await ensureIntegrationBranch(repoPath, 'run-123')
     const info = await createWorktree(repoPath, 'task-with-commits', 'feat: real work')
+    tmp.trackWorktree(info, repoPath)
 
     createTask(db, { id: 'task-with-commits', title: 'Real work', run_id: undefined })
     updateTask(db, 'task-with-commits', {
@@ -94,6 +89,7 @@ describe('empty branch detection', () => {
   it('proceeds normally when head_sha is not stored (legacy task without head_sha)', async () => {
     await ensureIntegrationBranch(repoPath)
     const info = await createWorktree(repoPath, 'task-legacy', 'feat: legacy task')
+    tmp.trackWorktree(info, repoPath)
 
     createTask(db, { id: 'task-legacy', title: 'Legacy task' })
     updateTask(db, 'task-legacy', {
@@ -117,6 +113,7 @@ describe('empty branch detection', () => {
 
   it('failure_reason is stored on the task record and visible via getTask', async () => {
     const info = await createWorktree(repoPath, 'task-reason', 'feat: reason check')
+    tmp.trackWorktree(info, repoPath)
 
     createTask(db, { id: 'task-reason', title: 'Reason check' })
     updateTask(db, 'task-reason', {

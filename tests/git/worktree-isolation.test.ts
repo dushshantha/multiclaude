@@ -1,29 +1,23 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { createWorktree, removeWorktree, readWorktreeGitDir } from '../../src/git/worktree.js'
 import { buildWorkerEnv } from '../../src/spawner/index.js'
 import { ensureIntegrationBranch, mergeWorktreeBranch } from '../../src/git/merge.js'
 import { execSync } from 'child_process'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { writeFileSync, readFileSync } from 'fs'
 import { join } from 'path'
+import { useTempDir } from '../helpers/temp.js'
 
 describe('worktree commit isolation', () => {
+  const tmp = useTempDir()
   let parentRepo: string
 
   beforeEach(() => {
-    parentRepo = mkdtempSync(join(tmpdir(), 'mc-isolation-test-'))
-    execSync('git init', { cwd: parentRepo })
-    execSync('git config user.email "test@test.com"', { cwd: parentRepo })
-    execSync('git config user.name "Test"', { cwd: parentRepo })
-    execSync('echo "init" > README.md && git add . && git commit -m "init"', { cwd: parentRepo })
-  })
-
-  afterEach(() => {
-    rmSync(parentRepo, { recursive: true, force: true })
+    parentRepo = tmp.repo('mc-isolation-test-')
   })
 
   it('createWorktree returns gitDir pointing to parent .git/worktrees/', async () => {
     const info = await createWorktree(parentRepo, 'iso-1', 'feat: isolation test')
+    tmp.trackWorktree(info, parentRepo)
     expect(info.gitDir).toContain('.git/worktrees/')
     const isDir = execSync(`test -d "${info.gitDir}" && echo yes || echo no`).toString().trim()
     expect(isDir).toBe('yes')
@@ -33,12 +27,14 @@ describe('worktree commit isolation', () => {
   it('createWorktree returns headSha matching base branch HEAD', async () => {
     const parentHead = execSync('git rev-parse HEAD', { cwd: parentRepo }).toString().trim()
     const info = await createWorktree(parentRepo, 'iso-2', 'feat: head check')
+    tmp.trackWorktree(info, parentRepo)
     expect(info.headSha).toBe(parentHead)
     await removeWorktree(parentRepo, info)
   })
 
   it('readWorktreeGitDir parses the .git file correctly', async () => {
     const info = await createWorktree(parentRepo, 'iso-3')
+    tmp.trackWorktree(info, parentRepo)
     const gitDir = readWorktreeGitDir(info.path)
     expect(gitDir).toBe(info.gitDir)
     const dotGitContent = readFileSync(join(info.path, '.git'), 'utf8')
@@ -48,6 +44,7 @@ describe('worktree commit isolation', () => {
 
   it('with isolation env vars, git commit from worktree lands on task branch', async () => {
     const info = await createWorktree(parentRepo, 'iso-4', 'feat: commit test')
+    tmp.trackWorktree(info, parentRepo)
     const env = buildWorkerEnv('w-iso-4', { worktreePath: info.path, gitDir: info.gitDir })
 
     writeFileSync(join(info.path, 'feature.ts'), 'export const x = 1')
@@ -65,6 +62,7 @@ describe('worktree commit isolation', () => {
 
   it('with isolation env vars, git operations from PARENT repo cwd still target worktree', async () => {
     const info = await createWorktree(parentRepo, 'iso-5', 'feat: cwd isolation')
+    tmp.trackWorktree(info, parentRepo)
     const env = buildWorkerEnv('w-iso-5', { worktreePath: info.path, gitDir: info.gitDir })
 
     writeFileSync(join(info.path, 'isolated.ts'), 'export const isolated = true')
@@ -84,7 +82,9 @@ describe('worktree commit isolation', () => {
   })
 
   it('without isolation env vars, git commands from parent cwd affect parent branch (demonstrates the bug)', async () => {
-    await createWorktree(parentRepo, 'iso-6', 'feat: no isolation')
+    const info = await createWorktree(parentRepo, 'iso-6', 'feat: no isolation')
+    // This worktree is not removed in the test body — register it for afterEach cleanup.
+    tmp.trackWorktree(info, parentRepo)
 
     writeFileSync(join(parentRepo, 'parent-file.ts'), 'export const parent = true')
     execSync('git add parent-file.ts && git commit -m "parent commit"', { cwd: parentRepo })
@@ -99,6 +99,7 @@ describe('worktree commit isolation', () => {
     await ensureIntegrationBranch(parentRepo, runId)
 
     const info = await createWorktree(parentRepo, 'iso-7', 'feat: merge test')
+    tmp.trackWorktree(info, parentRepo)
     const env = buildWorkerEnv('w-iso-7', { worktreePath: info.path, gitDir: info.gitDir })
 
     writeFileSync(join(info.path, 'merge-feature.ts'), 'export const merge = true')
@@ -114,7 +115,9 @@ describe('worktree commit isolation', () => {
 
   it('worktree branch naming still works correctly with gitDir/headSha fields', async () => {
     const info1 = await createWorktree(parentRepo, 'iso-branch-1', 'feat: branch naming')
+    tmp.trackWorktree(info1, parentRepo)
     const info2 = await createWorktree(parentRepo, 'iso-branch-2', 'fix: another bug')
+    tmp.trackWorktree(info2, parentRepo)
 
     expect(info1.branch).toBe('feature/branch-naming-1')
     expect(info2.branch).toBe('fix/another-bug-2')
@@ -135,6 +138,7 @@ describe('worktree commit isolation', () => {
     execSync('git checkout -', { cwd: parentRepo })
 
     const info = await createWorktree(parentRepo, 'iso-base', 'feat: based on dev', 'dev')
+    tmp.trackWorktree(info, parentRepo)
     expect(info.headSha).toBe(devHead)
 
     await removeWorktree(parentRepo, info)

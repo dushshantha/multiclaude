@@ -163,9 +163,9 @@ export async function mergeWorktreeBranch(
 
     // Step 2: Merge updated task branch into integration branch
     const tmpDir = mkdtempSync(join(tmpdir(), 'mc-merge-'))
-    await git.raw(['worktree', 'add', tmpDir, integBranch])
-
     try {
+      await git.raw(['worktree', 'add', tmpDir, integBranch])
+
       const tmpGit = simpleGit(tmpDir)
       try {
         await tmpGit.merge([branch, '--no-ff', '-m', `merge: ${branch} into ${integBranch}`])
@@ -181,7 +181,9 @@ export async function mergeWorktreeBranch(
         await tmpGit.raw(['commit', '-m', `merge: ${branch} into ${integBranch}`])
       }
     } finally {
-      await git.raw(['worktree', 'remove', '--force', tmpDir])
+      // Unconditional cleanup: rm must run even when worktree remove fails.
+      // Both are wrapped independently so neither can skip the other.
+      try { await git.raw(['worktree', 'remove', '--force', tmpDir]) } catch {}
       await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
     }
 
