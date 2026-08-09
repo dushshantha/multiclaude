@@ -157,10 +157,14 @@ function runHook(
     new URL('../../src/spawner/worktree-guard-hook.ts', import.meta.url).pathname,
   )
   const input = JSON.stringify(payload)
+  // Strip MULTICLAUDE_WORKTREE from the base env so tests that want it absent
+  // (e.g. "allow through when not set") work correctly even when run inside a
+  // MultiClaude worker process that has this variable set.
+  const { MULTICLAUDE_WORKTREE: _w, MULTICLAUDE_TASK_ID: _t, ...baseEnv } = process.env
   try {
     const stdout = execSync(`echo '${input.replace(/'/g, "'\\''")}' | npx tsx ${hookPath}`, {
       encoding: 'utf-8',
-      env: { ...process.env, ...env },
+      env: { ...baseEnv, ...env },
       timeout: 10000,
     })
     return { exitCode: 0, stdout, stderr: '' }
