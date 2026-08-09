@@ -8,18 +8,20 @@ export interface Agent {
   pid: number | null
   status: AgentStatus
   cwd: string | null
+  repo_path: string | null
   tmux_pane: string | null
   failure_reason: string | null
   failure_detail: string | null
   created_at: string
 }
 
-export function registerAgent(db: Database.Database, input: { id: string; task_id?: string; pid?: number; cwd?: string }): void {
-  db.prepare('INSERT OR IGNORE INTO agents (id, task_id, pid, cwd) VALUES (@id, @task_id, @pid, @cwd)').run({
+export function registerAgent(db: Database.Database, input: { id: string; task_id?: string; pid?: number; cwd?: string; repo_path?: string }): void {
+  db.prepare('INSERT OR IGNORE INTO agents (id, task_id, pid, cwd, repo_path) VALUES (@id, @task_id, @pid, @cwd, @repo_path)').run({
     id: input.id,
     task_id: input.task_id ?? null,
     pid: input.pid ?? null,
     cwd: input.cwd ?? null,
+    repo_path: input.repo_path ?? null,
   })
 }
 
@@ -27,12 +29,13 @@ export function getAgent(db: Database.Database, id: string): Agent | null {
   return (db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as Agent | undefined) ?? null
 }
 
-export function updateAgent(db: Database.Database, id: string, input: { status?: AgentStatus; pid?: number; cwd?: string; tmux_pane?: string; failure_reason?: string; failure_detail?: string }): void {
+export function updateAgent(db: Database.Database, id: string, input: { status?: AgentStatus; pid?: number; cwd?: string; repo_path?: string; tmux_pane?: string; failure_reason?: string; failure_detail?: string }): void {
   const sets: string[] = []
   const params: Record<string, unknown> = { id }
   if (input.status !== undefined) { sets.push('status = @status'); params.status = input.status }
   if (input.pid !== undefined) { sets.push('pid = @pid'); params.pid = input.pid }
   if (input.cwd !== undefined) { sets.push('cwd = @cwd'); params.cwd = input.cwd }
+  if (input.repo_path !== undefined) { sets.push('repo_path = @repo_path'); params.repo_path = input.repo_path }
   if (input.tmux_pane !== undefined) { sets.push('tmux_pane = @tmux_pane'); params.tmux_pane = input.tmux_pane }
   if (input.failure_reason !== undefined) { sets.push('failure_reason = @failure_reason'); params.failure_reason = input.failure_reason }
   if (input.failure_detail !== undefined) { sets.push('failure_detail = @failure_detail'); params.failure_detail = input.failure_detail }

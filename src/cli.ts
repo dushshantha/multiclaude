@@ -24,6 +24,7 @@ interface AgentRow {
   id: string
   task_id: string | null
   cwd: string | null
+  repo_path: string | null
   pid: number | null
   status: string
 }
@@ -89,16 +90,24 @@ function startSpawnerWatcher(
       const retryKey = `${task.id}-${retryAttempt}`
       if (retried.has(retryKey)) continue
 
-      // Find cwd from the most recent agent for this task, or fall back to repo_path
-      // (repo_path is saved early in handleSpawnWorker before worktree creation, so it
-      // exists even when the agent was never registered due to a worktree creation failure).
+      // Resolve the real repo path for the retry spawn.
+      // prevAgent.cwd is the WORKTREE path (a temp dir), never the repo — using it would
+      // pass a linked worktree to handleSpawnWorker, which would then try to reconcile
+      // the already-checked-out task branch and throw "Refusing to reconcile".
+      // The authoritative source is prevAgent.repo_path (recorded by handleSpawnWorker),
+      // falling back to task.repo_path which is written early before worktree creation.
       const prevAgent = db.prepare(
         "SELECT * FROM agents WHERE task_id = ? ORDER BY created_at DESC LIMIT 1"
       ).get(task.id) as AgentRow | undefined
 
-      const retryCwd = prevAgent?.cwd ?? task.repo_path ?? null
+      const retryCwd = prevAgent?.repo_path ?? task.repo_path ?? null
       if (!retryCwd) {
-        console.warn(`[spawner] Cannot retry task ${task.id}: no cwd found for previous agent`)
+        console.error(`[spawner] Cannot retry task ${task.id}: no repo_path on previous agent or task record`)
+        db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+          task.id, 'error',
+          'Cannot retry: no repo_path found — manual intervention required'
+        )
+        retried.add(retryKey)
         continue
       }
 
