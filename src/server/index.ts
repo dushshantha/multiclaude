@@ -176,8 +176,8 @@ export function createOrchestratorMcp(db: Database.Database): McpServer {
     'Manually mark a task as done. Use only as a recovery measure when a worker completed work but failed to call report_done (e.g. the subprocess crashed). Marks the task and its agent as done.',
     { task_id: z.string(), summary: z.string() },
     async ({ task_id, summary }) => {
-      handleCompleteTask(db, task_id, summary)
-      return { content: [{ type: 'text' as const, text: `Task ${task_id} marked as done` }] }
+      const result = await handleCompleteTask(db, task_id, summary)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
     }
   )
 

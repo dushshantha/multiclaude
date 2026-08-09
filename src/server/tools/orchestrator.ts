@@ -13,7 +13,7 @@ import { hasRemote, getRemoteUrl, parseGitHubRemote, pushBranch, getBranchSyncSt
 import type { PushResult } from '../../git/ops.js'
 import { createPullRequest } from '../../git/pr.js'
 import type { PrResult } from '../../git/pr.js'
-import { ensureIntegrationBranch, mergeWorktreeBranch, isAutoResolvable, RUN_INTEGRATION_BRANCH } from '../../git/merge.js'
+import { ensureIntegrationBranch, mergeWorktreeBranch, isAutoResolvable, RUN_INTEGRATION_BRANCH, MergeConflictError, isMergedInto } from '../../git/merge.js'
 
 export const VALID_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type EffortValue = typeof VALID_EFFORT_VALUES[number]
@@ -204,11 +204,17 @@ export function handleCancelTask(db: Database.Database, taskId: string): void {
   }
 }
 
-export function handleCompleteTask(
+export interface CompleteTaskResult {
+  ok: boolean
+  merged: boolean
+  reason?: string
+}
+
+export async function handleCompleteTask(
   db: Database.Database,
   taskId: string,
   summary: string
-): void {
+): Promise<CompleteTaskResult> {
   updateTask(db, taskId, { status: 'done' })
   db.prepare(
     'INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)'
@@ -216,6 +222,64 @@ export function handleCompleteTask(
   const task = getTask(db, taskId)
   if (task?.agent_id) {
     updateAgent(db, task.agent_id, { status: 'done' })
+  }
+
+  // Guard: skip merge if branch, worktree_path, or repo_path is missing.
+  // This happens when the worker died before the worktree was fully set up.
+  const repoPath = task?.repo_path ?? (task?.run_id
+    ? (db.prepare('SELECT p.cwd FROM projects p JOIN runs r ON r.project_id = p.id WHERE r.id = ?').get(task.run_id) as { cwd: string } | undefined)?.cwd
+    : undefined)
+
+  if (!task?.branch || !task.worktree_path || !repoPath) {
+    const missing = !task ? 'task' : !task.branch ? 'branch' : !task.worktree_path ? 'worktree_path' : 'repo_path'
+    return { ok: true, merged: false, reason: `no_${missing}` }
+  }
+
+  const runId = task.run_id ?? undefined
+  const integBranch = runId ? RUN_INTEGRATION_BRANCH(runId) : 'mc/integration'
+
+  try {
+    await ensureIntegrationBranch(repoPath, runId)
+    await mergeWorktreeBranch(repoPath, task.branch, runId, task.worktree_path)
+    updateTask(db, taskId, { merged_into_run: true })
+    db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+      taskId, 'info', `Merged ${task.branch} into ${integBranch}`
+    )
+    return { ok: true, merged: true }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+
+    // Verify the merge didn't actually land despite the error (e.g. push error after merge commit).
+    let landed = false
+    try {
+      landed = await isMergedInto(repoPath, task.branch, integBranch)
+    } catch { /* conservative: assume not landed */ }
+
+    if (landed) {
+      updateTask(db, taskId, { merged_into_run: true })
+      db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+        taskId, 'warn', `post_merge_cleanup_failed: ${msg}`
+      )
+      return { ok: true, merged: true }
+    } else if (err instanceof MergeConflictError) {
+      // KEEP the worktree so the orchestrator and conflict worker can inspect it.
+      db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+        taskId, 'error', `Merge conflict: ${task.branch} cannot be merged into ${integBranch} — conflicted files: ${err.conflictedFiles.join(', ')}`
+      )
+      updateTask(db, taskId, {
+        status: 'failed',
+        failure_reason: 'merge_conflict',
+        failure_detail: err.message,
+        conflicted_files: err.conflictedFiles,
+        conflict_branch: integBranch,
+      })
+      return { ok: false, merged: false, reason: `merge_conflict: ${err.conflictedFiles.join(', ')}` }
+    } else {
+      db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+        taskId, 'error', `Merge failed: ${task.branch} could not be merged — ${msg}`
+      )
+      return { ok: false, merged: false, reason: `merge_failed: ${msg}` }
+    }
   }
 }
 
@@ -722,8 +786,14 @@ export async function handleResolveMergeConflict(
   const task = getTask(db, taskId)
   if (!task) return { ok: false, detail: `Task '${taskId}' not found` }
 
-  if (task.failure_reason !== 'merge_conflict') {
-    return { ok: false, detail: `Task '${taskId}' is not in merge_conflict state (failure_reason: ${task.failure_reason ?? 'none'})` }
+  const isConflictState = task.failure_reason === 'merge_conflict'
+  const isDoneUnmerged = task.status === 'done' && !task.merged_into_run
+
+  if (!isConflictState && !isDoneUnmerged) {
+    return {
+      ok: false,
+      detail: `Task '${taskId}' is not in merge_conflict state and is not a done-but-unmerged task (failure_reason: ${task.failure_reason ?? 'none'}, status: ${task.status}, merged_into_run: ${task.merged_into_run ?? null})`,
+    }
   }
 
   if (!task.branch || !task.repo_path) {
@@ -791,6 +861,16 @@ export async function handleResolveMergeConflict(
       } catch (strategyErr: unknown) {
         const strategyMsg = strategyErr instanceof Error ? strategyErr.message : String(strategyErr)
         try { await g.raw(['merge', '--abort']) } catch { /* ignore */ }
+        // For done+unmerged tasks, set merge_conflict state so spawnConflictResolutionWorker accepts the task.
+        if (isDoneUnmerged) {
+          updateTask(db, taskId, {
+            status: 'failed',
+            failure_reason: 'merge_conflict',
+            failure_detail: strategyMsg,
+            conflicted_files: nonAutoResolvable,
+            conflict_branch: integBranch,
+          })
+        }
         const spawnResult = await spawnConflictResolutionWorker(db, taskId)
         return {
           ok: false,
@@ -803,6 +883,16 @@ export async function handleResolveMergeConflict(
       }
     }
 
+    // For done+unmerged tasks, set merge_conflict state so spawnConflictResolutionWorker accepts the task.
+    if (isDoneUnmerged) {
+      updateTask(db, taskId, {
+        status: 'failed',
+        failure_reason: 'merge_conflict',
+        failure_detail: msg,
+        conflicted_files: nonAutoResolvable,
+        conflict_branch: task.run_id ? RUN_INTEGRATION_BRANCH(task.run_id) : 'mc/integration',
+      })
+    }
     const spawnResult = await spawnConflictResolutionWorker(db, taskId)
     return {
       ok: false,
