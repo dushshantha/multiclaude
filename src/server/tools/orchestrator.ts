@@ -254,9 +254,9 @@ export async function handleSpawnWorker(
   }
 
   let agentCwd = opts.cwd
+  let repoPath: string | undefined
   if (opts.cwd) {
     const isMain = await isMainCheckout(opts.cwd)
-    let repoPath: string
     if (isMain) {
       repoPath = opts.cwd
       upsertProject(db, { name: path.basename(opts.cwd), cwd: opts.cwd })
@@ -292,7 +292,7 @@ export async function handleSpawnWorker(
       return { ok: false, error: `Failed to create worktree for task ${taskId}: ${msg}` }
     }
   }
-  registerAgent(db, { id: agentId, task_id: taskId, pid: opts.pid, cwd: agentCwd })
+  registerAgent(db, { id: agentId, task_id: taskId, pid: opts.pid, cwd: agentCwd, repo_path: repoPath })
   updateTask(db, taskId, { status: 'in_progress', agent_id: agentId, started_at: new Date().toISOString() })
   return { ok: true }
 }
