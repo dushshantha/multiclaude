@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import { getTask, updateTask } from '../server/state/tasks.js'
 import { updateAgent } from '../server/state/agents.js'
-import { captureTmuxPane, killTmuxWindow } from './tmux.js'
+import { captureTmuxPane, killTmuxWindow, getChildProcessPid } from './tmux.js'
 
 interface RunningAgentRow {
   id: string
@@ -17,6 +17,13 @@ const BUSY_PATTERNS = [
 
 /** Canonical failure reason written to logs when an agent never called get_my_task. */
 export const AGENT_NEVER_STARTED_REASON = 'agent process never started'
+
+// Timing constants for the agent-start verification polling loop.
+// Keep the 2s initial delay (lets send-keys settle), then poll every 1.5s for up to
+// 30 attempts ≈ 47s total — enough headroom for a cold claude start with an MCP config.
+export const VERIFY_INITIAL_DELAY_MS = 2000
+export const VERIFY_INTERVAL_MS = 1500
+export const VERIFY_MAX_ATTEMPTS = 30
 
 /**
  * Returns true if the captured pane text contains a Claude Code busy footer
@@ -153,4 +160,75 @@ export function checkStuckWorkers(
       stuckSince.delete(task.id)
     }
   }
+}
+
+/**
+ * Polls asynchronously to verify that a tmux worker actually launched a claude process.
+ * At spawn time we record the pane shell's PID, but claude runs as a child of that shell.
+ * We poll for a child process of panePid; if none appears within the window we capture
+ * the pane and check `isPaneBusy` — a busy footer means Claude is mid-turn and the
+ * agent IS alive, so we reset the counter and keep waiting instead of declaring failure.
+ *
+ * Injectable for testing: getChildPid, capturePane, killWindow, and schedule.
+ */
+export function startVerifyAgentStarted(
+  db: Database.Database,
+  panePid: number,
+  agentId: string,
+  taskId: string,
+  paneId: string,
+  getChildPid: (pid: number) => number | undefined = getChildProcessPid,
+  capturePane: (target: string, lines: number) => string = captureTmuxPane,
+  killWindow: (windowId: string) => void = killTmuxWindow,
+  schedule: (fn: () => void, ms: number) => void = (fn, ms) => { setTimeout(fn, ms) },
+  maxAttempts: number = VERIFY_MAX_ATTEMPTS,
+  intervalMs: number = VERIFY_INTERVAL_MS,
+  initialDelayMs: number = VERIFY_INITIAL_DELAY_MS,
+): void {
+  let attempts = 0
+
+  const poll = () => {
+    const agentRow = db.prepare('SELECT status FROM agents WHERE id = ?')
+      .get(agentId) as { status: string } | undefined
+    if (agentRow?.status !== 'spawning') return
+
+    const childPid = getChildPid(panePid)
+    if (childPid !== undefined) {
+      updateAgent(db, agentId, { pid: childPid })
+      return
+    }
+
+    attempts++
+    if (attempts < maxAttempts) {
+      schedule(poll, intervalMs)
+      return
+    }
+
+    // All attempts exhausted — check busy footer before declaring failure.
+    // A pane showing "ESC to interrupt" means the worker is alive and mid-turn.
+    const paneText = capturePane(paneId, 6)
+    if (isPaneBusy(paneText)) {
+      attempts = 0
+      schedule(poll, intervalMs)
+      return
+    }
+
+    // Final guard: another handler may have already transitioned the agent
+    const current = db.prepare('SELECT status FROM agents WHERE id = ?')
+      .get(agentId) as { status: string } | undefined
+    if (current?.status !== 'spawning') return
+
+    console.warn(`[spawner] ${AGENT_NEVER_STARTED_REASON} for agent ${agentId}`)
+    updateAgent(db, agentId, { status: 'failed' })
+    const t = getTask(db, taskId)
+    if (t && t.status !== 'done' && t.status !== 'failed') {
+      updateTask(db, taskId, { status: 'failed' })
+    }
+    db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+      taskId, 'error', AGENT_NEVER_STARTED_REASON
+    )
+    killWindow(paneId)
+  }
+
+  schedule(poll, initialDelayMs)
 }
