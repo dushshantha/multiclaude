@@ -278,14 +278,22 @@ describe('spawner', () => {
 })
 
 describe('buildWorkerSettings', () => {
-  it('scopes Write permission to the worktree path', () => {
-    const settings = buildWorkerSettings({ worktreePath: '/tmp/mc-test-worktree' }) as any
-    expect(settings.permissions.allow).toContain('Write(/tmp/mc-test-worktree/**)')
-  })
-
-  it('scopes Edit permission to the worktree path', () => {
+  it('scopes Edit permission to the worktree path (Edit covers all file-editing tools including Write)', () => {
     const settings = buildWorkerSettings({ worktreePath: '/tmp/mc-test-worktree' }) as any
     expect(settings.permissions.allow).toContain('Edit(/tmp/mc-test-worktree/**)')
+  })
+
+  it('does not emit path-scoped Write rules (Claude Code ignores Write(path), only Edit(path) is matched)', () => {
+    const settings = buildWorkerSettings({
+      worktreePath: '/tmp/mc-test-worktree',
+      repoPath: '/Users/alice/myproject',
+    }) as any
+    const allRules = [
+      ...(settings.permissions.allow ?? []),
+      ...(settings.permissions.deny ?? []),
+    ]
+    const pathScopedWrite = allRules.filter((r: string) => r.startsWith('Write(') && r !== 'Write(*)')
+    expect(pathScopedWrite).toHaveLength(0)
   })
 
   it('keeps Read(*) as unrestricted (hook enforces boundary)', () => {
@@ -312,14 +320,14 @@ describe('buildWorkerSettings', () => {
     expect(settings.permissions.allow).toContain('mcp__multiclaude-worker__report_blocked')
   })
 
-  it('adds deny rules for repoPath when provided', () => {
+  it('adds Edit deny rule for repoPath when provided (Edit covers all file-editing tools including Write)', () => {
     const settings = buildWorkerSettings({
       worktreePath: '/tmp/mc-test-worktree',
       repoPath: '/Users/alice/myproject',
     }) as any
     expect(settings.permissions.deny).toBeDefined()
-    expect(settings.permissions.deny).toContain('Write(/Users/alice/myproject/**)')
     expect(settings.permissions.deny).toContain('Edit(/Users/alice/myproject/**)')
+    expect(settings.permissions.deny).not.toContain('Write(/Users/alice/myproject/**)')
   })
 
   it('omits deny key when no repoPath is provided', () => {
