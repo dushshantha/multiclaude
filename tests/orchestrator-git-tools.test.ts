@@ -90,6 +90,21 @@ vi.mock('../src/git/merge.js', () => {
   }
 })
 
+vi.mock('../src/git/worktree.js', () => ({
+  createWorktree: vi.fn().mockResolvedValue({
+    path: '/tmp/mc-fake-conflict-t1',
+    branch: 'mc/conflict-t1',
+    taskId: 'conflict-t1',
+    gitDir: '/fake/.git/worktrees/conflict-t1',
+    headSha: 'deadbeef',
+    reconcileActions: [],
+  }),
+  removeWorktree: vi.fn().mockResolvedValue(undefined),
+  preflightReconcile: vi.fn().mockResolvedValue({ actions: [], branch: 'mc/t1' }),
+  isProtectedBranch: vi.fn((b: string) => /^(main|master)$|^mc\/run-/.test(b)),
+  readWorktreeGitDir: vi.fn(() => '/fake/.git/worktrees/t1'),
+}))
+
 vi.mock('../src/spawner/tmux.js', () => ({
   killTmuxWindow: vi.fn(),
   reapStaleWindows: vi.fn(),

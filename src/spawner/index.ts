@@ -170,7 +170,8 @@ export function buildWorkerSettings(cfg: {
     // Bash cannot be scoped to a path via Claude Code's glob permission format.
     // cwd isolation (worktree as cwd) and GIT_DIR env vars limit its blast radius.
     'Bash(*)',
-    `Write(${cfg.worktreePath}/**)`,
+    // Edit(path) covers all file-editing tools including Write — Claude Code only
+    // matches file permissions against Edit(path) rules, not Write(path) rules.
     `Edit(${cfg.worktreePath}/**)`,
     'Read(*)',
     'mcp__multiclaude-worker__get_my_task',
@@ -181,9 +182,11 @@ export function buildWorkerSettings(cfg: {
 
   // Explicitly deny writes to the parent project repo so even if a glob rule
   // were widened in the future, the deny takes precedence.
+  // Edit(path) is the correct form — Claude Code matches file permissions on
+  // Edit(path) rules (covering all file-editing tools), not Write(path) rules.
   const deny: string[] = []
   if (cfg.repoPath) {
-    deny.push(`Write(${cfg.repoPath}/**)`, `Edit(${cfg.repoPath}/**)`)
+    deny.push(`Edit(${cfg.repoPath}/**)`)
   }
 
   return {
