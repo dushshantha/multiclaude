@@ -160,7 +160,7 @@ The conflict worker's job: resolve each conflicted file, stage it, commit the me
 worker calls `report_done` → `handleReportDone` in [worker.ts](src/server/tools/worker.ts) marks task done and triggers `mergeWorktreeBranch` → `wait_for_event` unblocks in orchestrator → orchestrator spawns next wave of workers
 
 **Retry flow:**
-subprocess exits without calling `report_done` → spawner watcher marks agent `failed` → spawner watcher auto-retries up to `max_retries` (default 3) times → on final failure, orchestrator escalates to user
+subprocess exits without calling `report_done` → spawner watcher marks agent `failed` → spawner watcher auto-retries up to `max_retries` (default 3) times, always using the **project repo path** (not the worker's temp worktree) → on final failure, orchestrator escalates to user. Each agent row carries both `repo_path` (the main repository checkout, set by `isMainCheckout` guard in `handleSpawnWorker`) and `cwd` (the task's temp worktree). Retries must always receive the main repo path because `preflightReconcile` refuses to reconcile a branch that is already checked out in the directory it is operating on — passing a worktree (where the branch IS checked out) fails preflightReconcile deterministically and traps auto-recovery in `needs_human` status.
 
 ### Tmux worker runtime
 
@@ -185,7 +185,9 @@ Each worker runs in its own `mc-<taskId>` window. You can watch it live, scroll 
 - **Web dashboard** (`src/web/server.ts`, `src/web/public/run.html`): exposes `GET /api/peek/:agentId?lines=<n>` which calls `captureTmuxPane` and returns raw pane content. The run detail page shows a **PANE** tab (alongside LOGS) for tasks that have a tmux pane; it polls `/api/peek` every 2 seconds and renders the output line by line.
 - **Send/steer channel:** `sendToPane(target, text, opts)` types text into a pane and verifies submission by reading back pane content. It handles four Claude Code composer layouts (bordered, ghost-text, busy-footer, bare-prompt) and retries pressing Enter (without retyping the text) if the composer still shows the input after the first keystroke.
 
-**Busy-footer detection** (`src/spawner/stuck-watcher.ts`): before marking a tmux worker as stuck, the watcher calls `captureTmuxPane` and checks the last 6 non-blank lines for `"ESC to interrupt"` or `"working..."`. A pane showing a busy indicator is skipped — the worker is mid-turn, not stuck.
+**Agent-start verification and busy-footer protection** (`src/spawner/stuck-watcher.ts`): At spawn time, a polling loop verifies that the claude process actually started inside the tmux pane. The window is widened to ~47 seconds total (2s initial delay, then 30 attempts × 1.5s interval) to give cold claude starts headroom to initialize. When verification attempts are exhausted, before declaring failure, the watcher checks for a busy footer in the last 6 non-blank lines. If the pane shows `"ESC to interrupt"` or `"working..."`, the worker is mid-turn; the counter resets and polling continues rather than timing out. This protects against premature failure when Claude is legitimately processing.
+
+For running agents, the same busy-footer detection prevents false stuck warnings: before marking a worker as stuck, the watcher calls `captureTmuxPane` and checks for busy indicators. A pane showing activity is skipped — the worker is mid-turn, not stalled.
 
 ### MCP transport
 
