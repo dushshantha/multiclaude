@@ -24,10 +24,10 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { execSync } from 'child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { writeFileSync } from 'fs'
 import { join } from 'path'
 import type Database from 'better-sqlite3'
+import { useTempDir } from './helpers/temp.js'
 
 // ── Stubs ────────────────────────────────────────────────────────────────────
 
@@ -96,17 +96,17 @@ function addRemote(repoPath: string, remotePath: string): void {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('git pipeline e2e', () => {
+  const tmp = useTempDir()
+
   let db: Database.Database
   let repoPath: string
   let remotePath: string
   let projectId: string
   let runId: string
-  let worktreesToClean: string[]
 
   beforeEach(() => {
-    repoPath = mkdtempSync(join(tmpdir(), 'mc-e2e-repo-'))
-    remotePath = mkdtempSync(join(tmpdir(), 'mc-e2e-remote-'))
-    worktreesToClean = []
+    repoPath = tmp.dir('mc-e2e-repo-')
+    remotePath = tmp.dir('mc-e2e-remote-')
 
     initRepo(repoPath)
     initBareRemote(remotePath)
@@ -129,11 +129,6 @@ describe('git pipeline e2e', () => {
 
   afterEach(() => {
     closeDb(db)
-    for (const p of worktreesToClean) {
-      rmSync(p, { recursive: true, force: true })
-    }
-    rmSync(repoPath, { recursive: true, force: true })
-    rmSync(remotePath, { recursive: true, force: true })
   })
 
   describe('happy path: two-task run reaches PR-ready state', () => {
@@ -147,14 +142,14 @@ describe('git pipeline e2e', () => {
       expect(spawnAlpha.ok).toBe(true)
       const taskAlpha = getTask(db, 'task-alpha')!
       expect(taskAlpha.worktree_path).toBeTruthy()
-      worktreesToClean.push(taskAlpha.worktree_path!)
+      tmp.trackWorktree({ path: taskAlpha.worktree_path!, branch: taskAlpha.branch! }, repoPath)
 
       // Spawn task-beta (creates worktree on mc/task-beta)
       const spawnBeta = await handleSpawnWorker(db, 'task-beta', 'w-beta', { cwd: repoPath })
       expect(spawnBeta.ok).toBe(true)
       const taskBeta = getTask(db, 'task-beta')!
       expect(taskBeta.worktree_path).toBeTruthy()
-      worktreesToClean.push(taskBeta.worktree_path!)
+      tmp.trackWorktree({ path: taskBeta.worktree_path!, branch: taskBeta.branch! }, repoPath)
 
       // Simulate task-alpha worker making a commit
       writeFileSync(join(taskAlpha.worktree_path!, 'alpha.ts'), 'export const alpha = 1\n')
@@ -196,7 +191,7 @@ describe('git pipeline e2e', () => {
       const spawnX = await handleSpawnWorker(db, 'task-x', 'w-x', { cwd: repoPath })
       expect(spawnX.ok).toBe(true)
       const taskX = getTask(db, 'task-x')!
-      worktreesToClean.push(taskX.worktree_path!)
+      tmp.trackWorktree({ path: taskX.worktree_path!, branch: taskX.branch! }, repoPath)
 
       writeFileSync(join(taskX.worktree_path!, 'x.ts'), 'export const x = 42\n')
       execSync('git add . && git commit -m "add x"', { cwd: taskX.worktree_path! })
@@ -220,7 +215,7 @@ describe('git pipeline e2e', () => {
       const spawn = await handleSpawnWorker(db, 'task-pr', 'w-pr', { cwd: repoPath })
       expect(spawn.ok).toBe(true)
       const task = getTask(db, 'task-pr')!
-      worktreesToClean.push(task.worktree_path!)
+      tmp.trackWorktree({ path: task.worktree_path!, branch: task.branch! }, repoPath)
 
       writeFileSync(join(task.worktree_path!, 'pr.ts'), 'export const pr = true\n')
       execSync('git add . && git commit -m "add pr"', { cwd: task.worktree_path! })
@@ -264,12 +259,12 @@ describe('git pipeline e2e', () => {
       const spawnLeft = await handleSpawnWorker(db, 'task-left', 'w-left', { cwd: repoPath })
       expect(spawnLeft.ok).toBe(true)
       const taskLeft = getTask(db, 'task-left')!
-      worktreesToClean.push(taskLeft.worktree_path!)
+      tmp.trackWorktree({ path: taskLeft.worktree_path!, branch: taskLeft.branch! }, repoPath)
 
       const spawnRight = await handleSpawnWorker(db, 'task-right', 'w-right', { cwd: repoPath })
       expect(spawnRight.ok).toBe(true)
       const taskRight = getTask(db, 'task-right')!
-      worktreesToClean.push(taskRight.worktree_path!)
+      tmp.trackWorktree({ path: taskRight.worktree_path!, branch: taskRight.branch! }, repoPath)
 
       // Both edit the same line in shared.ts differently
       writeFileSync(join(taskLeft.worktree_path!, 'shared.ts'), 'export const value = "left"\n')
@@ -308,12 +303,12 @@ describe('git pipeline e2e', () => {
       const spawnL = await handleSpawnWorker(db, 'task-conflict-l', 'w-cl', { cwd: repoPath })
       expect(spawnL.ok).toBe(true)
       const taskL = getTask(db, 'task-conflict-l')!
-      worktreesToClean.push(taskL.worktree_path!)
+      tmp.trackWorktree({ path: taskL.worktree_path!, branch: taskL.branch! }, repoPath)
 
       const spawnR = await handleSpawnWorker(db, 'task-conflict-r', 'w-cr', { cwd: repoPath })
       expect(spawnR.ok).toBe(true)
       const taskR = getTask(db, 'task-conflict-r')!
-      worktreesToClean.push(taskR.worktree_path!)
+      tmp.trackWorktree({ path: taskR.worktree_path!, branch: taskR.branch! }, repoPath)
 
       writeFileSync(join(taskL.worktree_path!, 'api.ts'), 'export function greet() { return "hi" }\n')
       execSync('git add . && git commit -m "change to hi"', { cwd: taskL.worktree_path! })
@@ -333,12 +328,20 @@ describe('git pipeline e2e', () => {
       // handleResolveMergeConflict cannot auto-resolve a semantic conflict in api.ts
       // — it should report needsWorker: true rather than dead-ending
       const resolveResult = await handleResolveMergeConflict(db, 'task-conflict-r')
+
+      // Track the conflict worker worktree BEFORE assertions so cleanup
+      // runs in afterEach even if an assertion below fails.
+      const conflictWorkerTask = getTask(db, 'conflict-task-conflict-r')
+      if (conflictWorkerTask?.worktree_path && conflictWorkerTask.branch) {
+        tmp.trackWorktree(
+          { path: conflictWorkerTask.worktree_path, branch: conflictWorkerTask.branch },
+          repoPath,
+        )
+      }
+
       expect(resolveResult.ok).toBe(false)
       expect(resolveResult.needsWorker).toBe(true)
       expect(resolveResult.conflictedFiles).toContain('api.ts')
-
-      // Keep worktree paths alive so afterEach can clean them up
-      if (taskR.worktree_path) worktreesToClean.push(`conflict-task-conflict-r-worktree`)
     }, 30000)
   })
 })
