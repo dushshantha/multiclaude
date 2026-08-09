@@ -459,6 +459,7 @@ When a task fails, attempt recovery before escalating. The recovery-first policy
    - **`recovered`**: Task was repaired automatically. Re-spawn it and continue without user involvement. Report as one line: `"✓ task-id recovered and re-spawned."`
    - **`unrecoverable` or `needs_human`**: Only escalate (see below)
    - Independently of the verdict: if `retry_count >= max_retries`, stop re-spawning and escalate — retries are genuinely exhausted
+3. When using `complete_task(task_id, summary)` as a recovery override: after calling it, check the returned `merged` flag and the task's `merged_into_run` field. If `merged` is `false` or the task's `merged_into_run` is not `true`, call `resolve_merge_conflict(task_id)` to re-drive the merge before proceeding to PR creation (do not escalate to the user unless `resolve_merge_conflict` returns `needs_human`).
 
 **Escalation phase** (only when recovery verdict isn't `recovered`):
 1. State what recovery already attempted and what was found
@@ -478,6 +479,7 @@ The orchestrator resolves git problems itself using MCP tools. Only escalate whe
 | All tasks done — need to open PR | Call `create_pr(run_id)`. Do not use any GitHub MCP tool directly. |
 | Integration branch not pushed / push rejected | Call `push_run_branch(run_id)` first, then retry `create_pr`. |
 | A task is in `merge_conflict` status | Call `resolve_merge_conflict(task_id)` — the tool attempts an automatic resolution. If it returns `resolved`, re-spawn the task. If it returns `needs_human`, escalate with the specific conflict details. |
+| A task is done but `merged_into_run` is false or null | Call `resolve_merge_conflict(task_id)` to re-drive the merge. This handles the case where the task branch exists but failed to land on the integration branch. |
 | Unsure what is blocking a PR (branch behind main, dirty state, etc.) | Call `git_status(run_id)` to get a snapshot of the integration branch state before deciding next steps. |
 | Git auth failure / credentials missing | Escalate to user immediately — this requires a human action outside the system. |
 | Force-push or history rewrite needed | Escalate to user — never do this autonomously. |
@@ -498,7 +500,7 @@ The orchestrator resolves git problems itself using MCP tools. Only escalate whe
 | `spawn_worker(task_id, agent_id, cwd)` | For every ready task, and after deps complete |
 | `cancel_task(task_id)` | When user wants to abort a task |
 | `recover_task(task_id)` | When a task fails — attempts automatic recovery; returns verdict (`recovered`, `unrecoverable`, or `needs_human`) |
-| `complete_task(task_id, summary)` | Recovery only — when worker did work but died without reporting |
+| `complete_task(task_id, summary)` | Recovery only — when worker did work but died without reporting. **Attempts to merge the task branch into the integration branch as part of the call.** Returns `{ ok, merged }`. If `merged` is false, the branch did not land; call `resolve_merge_conflict(task_id)` to re-drive the merge. |
 | `list_projects()` | List all projects with aggregate stats (task counts, run count, last_active_at) |
 | `list_runs(project_id?)` | List runs (optionally filtered by project); each shows task counts and derived_status |
 | `git_status(run_id)` | Get a snapshot of the integration branch state — use when unsure what is blocking a PR or before retrying a push |
