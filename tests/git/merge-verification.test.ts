@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { createDb, closeDb } from '../../src/server/state/db.js'
 import { createTask, updateTask, getTask } from '../../src/server/state/tasks.js'
 import { registerAgent } from '../../src/server/state/agents.js'
@@ -6,35 +6,24 @@ import { handleReportDone } from '../../src/server/tools/worker.js'
 import { createWorktree, removeWorktree } from '../../src/git/worktree.js'
 import { ensureIntegrationBranch, mergeWorktreeBranch, MergeConflictError } from '../../src/git/merge.js'
 import { execSync } from 'child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { writeFileSync } from 'fs'
 import { join } from 'path'
 import type Database from 'better-sqlite3'
-
-function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'mc-merge-verify-test-'))
-  execSync('git init', { cwd: dir })
-  execSync('git config user.email "test@test.com"', { cwd: dir })
-  execSync('git config user.name "Test"', { cwd: dir })
-  execSync('echo "init" > README.md && git add . && git commit -m "init"', { cwd: dir })
-  return dir
-}
+import { useTempDir } from '../helpers/temp.js'
 
 describe('merge verification', () => {
+  const tmp = useTempDir()
   let repoPath: string
 
   beforeEach(() => {
-    repoPath = makeRepo()
-  })
-
-  afterEach(() => {
-    rmSync(repoPath, { recursive: true, force: true })
+    repoPath = tmp.repo('mc-merge-verify-test-')
   })
 
   it('ancestor check passes after successful merge', async () => {
     const runId = 'ancestor-pass'
     await ensureIntegrationBranch(repoPath, runId)
     const info = await createWorktree(repoPath, 'task-ok', 'feat: ok')
+    tmp.trackWorktree(info, repoPath)
 
     writeFileSync(join(info.path, 'feature.ts'), 'export const x = 1')
     execSync('git add . && git commit -m "add feature"', { cwd: info.path })
@@ -55,6 +44,7 @@ describe('merge verification', () => {
     const runId = 'ancestor-fail'
     await ensureIntegrationBranch(repoPath, runId)
     const info = await createWorktree(repoPath, 'task-unmerged', 'feat: unmerged')
+    tmp.trackWorktree(info, repoPath)
 
     writeFileSync(join(info.path, 'unmerged.ts'), 'export const y = 2')
     execSync('git add . && git commit -m "unmerged commit"', { cwd: info.path })
@@ -83,6 +73,7 @@ describe('merge verification', () => {
 
     // Create worktree with a conflicting change
     const info = await createWorktree(repoPath, 'task-conflict', 'feat: conflict')
+    tmp.trackWorktree(info, repoPath)
     writeFileSync(join(info.path, 'conflict.ts'), 'export const value = "worker"')
     execSync('git add . && git commit -m "worker side"', { cwd: info.path })
 
@@ -106,6 +97,7 @@ describe('merge verification', () => {
     execSync(`git checkout ${origBranch}`, { cwd: repoPath })
 
     const info = await createWorktree(repoPath, 'task-clean', 'feat: clean')
+    tmp.trackWorktree(info, repoPath)
     writeFileSync(join(info.path, 'conflict.ts'), 'export const v = "b"')
     execSync('git add . && git commit -m "worker change"', { cwd: info.path })
 
@@ -132,6 +124,7 @@ describe('merge verification', () => {
     execSync(`git checkout ${origBranch}`, { cwd: repoPath })
 
     const info = await createWorktree(repoPath, 'task-files', 'feat: files')
+    tmp.trackWorktree(info, repoPath)
     writeFileSync(join(info.path, 'a.ts'), 'worker')
     writeFileSync(join(info.path, 'b.ts'), 'worker')
     execSync('git add . && git commit -m "worker files"', { cwd: info.path })
@@ -153,22 +146,24 @@ describe('merge verification', () => {
 })
 
 describe('merge verification in handleReportDone', () => {
+  const tmp = useTempDir()
   let db: Database.Database
   let repoPath: string
 
   beforeEach(() => {
     db = createDb(':memory:')
-    repoPath = makeRepo()
+    repoPath = tmp.repo('mc-merge-verify-test-')
   })
 
+  // afterEach for db (tmp handles dirs/worktrees)
   afterEach(() => {
     closeDb(db)
-    rmSync(repoPath, { recursive: true, force: true })
   })
 
   it('marks task done when merge succeeds and ancestor check passes', async () => {
     await ensureIntegrationBranch(repoPath)
     const info = await createWorktree(repoPath, 'task-done', 'feat: done')
+    tmp.trackWorktree(info, repoPath)
 
     createTask(db, { id: 'task-done', title: 'Done task' })
     updateTask(db, 'task-done', {
@@ -203,6 +198,9 @@ describe('merge verification in handleReportDone', () => {
     execSync(`git checkout ${origBranch}`, { cwd: repoPath })
 
     const info = await createWorktree(repoPath, 'task-conflict', 'feat: conflict')
+    // On merge conflict, handleReportDone keeps the worktree for inspection.
+    // Register it so afterEach cleans it up after the test finishes.
+    tmp.trackWorktree(info, repoPath)
 
     createTask(db, { id: 'task-conflict', title: 'Conflict task' })
     updateTask(db, 'task-conflict', {
@@ -234,6 +232,7 @@ describe('merge verification in handleReportDone', () => {
   it('failure_reason distinguishes "merge conflict" from "task branch has no commits"', async () => {
     // Set up an empty-branch scenario
     const info = await createWorktree(repoPath, 'task-empty', 'feat: empty')
+    tmp.trackWorktree(info, repoPath)
 
     createTask(db, { id: 'task-empty', title: 'Empty task' })
     updateTask(db, 'task-empty', {
@@ -261,6 +260,8 @@ describe('merge verification in handleReportDone', () => {
     execSync(`git checkout ${origBranch}`, { cwd: repoPath })
 
     const info2 = await createWorktree(repoPath, 'task-conflict', 'feat: conflict')
+    // kept on conflict — register for afterEach cleanup
+    tmp.trackWorktree(info2, repoPath)
 
     createTask(db, { id: 'task-conflict', title: 'Conflict task' })
     updateTask(db, 'task-conflict', {

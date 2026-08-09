@@ -1,19 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { ensureIntegrationBranch, mergeWorktreeBranch, MergeConflictError, isAutoResolvable } from '../../src/git/merge.js'
 import { createWorktree, removeWorktree } from '../../src/git/worktree.js'
 import { execSync } from 'child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { writeFileSync } from 'fs'
 import { join } from 'path'
-
-function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'mc-conflict-reduction-'))
-  execSync('git init', { cwd: dir })
-  execSync('git config user.email "test@test.com"', { cwd: dir })
-  execSync('git config user.name "Test"', { cwd: dir })
-  execSync('echo "init" > README.md && git add . && git commit -m "init"', { cwd: dir })
-  return dir
-}
+import { useTempDir } from '../helpers/temp.js'
 
 describe('isAutoResolvable', () => {
   it('identifies standard lockfiles', () => {
@@ -50,14 +41,11 @@ describe('isAutoResolvable', () => {
 })
 
 describe('update-before-merge', () => {
+  const tmp = useTempDir()
   let repoPath: string
 
   beforeEach(() => {
-    repoPath = makeRepo()
-  })
-
-  afterEach(() => {
-    rmSync(repoPath, { recursive: true, force: true })
+    repoPath = tmp.repo('mc-conflict-reduction-')
   })
 
   it('updates task branch with integration changes before assembly merge', async () => {
@@ -67,6 +55,7 @@ describe('update-before-merge', () => {
 
     // First task merges into integration
     const info1 = await createWorktree(repoPath, 'task-up-1')
+    tmp.trackWorktree(info1, repoPath)
     writeFileSync(join(info1.path, 'first.ts'), 'export const first = 1')
     execSync('git add . && git commit -m "add first"', { cwd: info1.path })
     await mergeWorktreeBranch(repoPath, info1.branch, runId)
@@ -74,6 +63,7 @@ describe('update-before-merge', () => {
 
     // Second task: branched from main (stale — doesn't have first.ts)
     const info2 = await createWorktree(repoPath, 'task-up-2')
+    tmp.trackWorktree(info2, repoPath)
     writeFileSync(join(info2.path, 'second.ts'), 'export const second = 2')
     execSync('git add . && git commit -m "add second"', { cwd: info2.path })
 
@@ -99,6 +89,7 @@ describe('update-before-merge', () => {
 
     // Task branched from same point as integration — no update needed
     const info = await createWorktree(repoPath, 'task-same-base')
+    tmp.trackWorktree(info, repoPath)
     writeFileSync(join(info.path, 'feature.ts'), 'export const x = 1')
     execSync('git add . && git commit -m "add feature"', { cwd: info.path })
 
@@ -118,14 +109,17 @@ describe('update-before-merge', () => {
 
     // All three tasks branch from main simultaneously (before any merges)
     const info1 = await createWorktree(repoPath, 'task-3a')
+    tmp.trackWorktree(info1, repoPath)
     writeFileSync(join(info1.path, 'a.ts'), 'export const a = 1')
     execSync('git add . && git commit -m "add a"', { cwd: info1.path })
 
     const info2 = await createWorktree(repoPath, 'task-3b')
+    tmp.trackWorktree(info2, repoPath)
     writeFileSync(join(info2.path, 'b.ts'), 'export const b = 2')
     execSync('git add . && git commit -m "add b"', { cwd: info2.path })
 
     const info3 = await createWorktree(repoPath, 'task-3c')
+    tmp.trackWorktree(info3, repoPath)
     writeFileSync(join(info3.path, 'c.ts'), 'export const c = 3')
     execSync('git add . && git commit -m "add c"', { cwd: info3.path })
 
@@ -151,14 +145,11 @@ describe('update-before-merge', () => {
 })
 
 describe('extended auto-resolution', () => {
+  const tmp = useTempDir()
   let repoPath: string
 
   beforeEach(() => {
-    repoPath = makeRepo()
-  })
-
-  afterEach(() => {
-    rmSync(repoPath, { recursive: true, force: true })
+    repoPath = tmp.repo('mc-conflict-reduction-')
   })
 
   it('auto-resolves yarn.lock add/add conflict', async () => {
@@ -175,6 +166,7 @@ describe('extended auto-resolution', () => {
 
     // Create worktree with different yarn.lock
     const info = await createWorktree(repoPath, 'task-yarn')
+    tmp.trackWorktree(info, repoPath)
     writeFileSync(join(info.path, 'yarn.lock'), '# yarn lockfile v1\nresolved "worker"')
     writeFileSync(join(info.path, 'feature.ts'), 'export const f = 1')
     execSync('git add . && git commit -m "add yarn.lock + feature"', { cwd: info.path })
@@ -200,6 +192,7 @@ describe('extended auto-resolution', () => {
     execSync(`git checkout ${origBranch}`, { cwd: repoPath })
 
     const info = await createWorktree(repoPath, 'task-pnpm')
+    tmp.trackWorktree(info, repoPath)
     writeFileSync(join(info.path, 'pnpm-lock.yaml'), 'lockfileVersion: 5.4\nworker: true')
     execSync('git add . && git commit -m "add pnpm-lock"', { cwd: info.path })
 
@@ -220,6 +213,7 @@ describe('extended auto-resolution', () => {
     execSync(`git checkout ${origBranch}`, { cwd: repoPath })
 
     const info = await createWorktree(repoPath, 'task-cargo')
+    tmp.trackWorktree(info, repoPath)
     writeFileSync(join(info.path, 'Cargo.lock'), '[[package]]\nname = "worker"')
     execSync('git add . && git commit -m "add Cargo.lock"', { cwd: info.path })
 
@@ -241,6 +235,7 @@ describe('extended auto-resolution', () => {
     execSync(`git checkout ${origBranch}`, { cwd: repoPath })
 
     const info = await createWorktree(repoPath, 'task-mixed')
+    tmp.trackWorktree(info, repoPath)
     writeFileSync(join(info.path, 'package-lock.json'), '{"worker": true}')
     writeFileSync(join(info.path, 'worker-only.ts'), 'export const worker = 1')
     execSync('git add . && git commit -m "worker changes"', { cwd: info.path })
@@ -256,14 +251,11 @@ describe('extended auto-resolution', () => {
 })
 
 describe('unresolvable conflict failure', () => {
+  const tmp = useTempDir()
   let repoPath: string
 
   beforeEach(() => {
-    repoPath = makeRepo()
-  })
-
-  afterEach(() => {
-    rmSync(repoPath, { recursive: true, force: true })
+    repoPath = tmp.repo('mc-conflict-reduction-')
   })
 
   it('throws MergeConflictError with file paths for source code conflicts', async () => {
@@ -278,6 +270,7 @@ describe('unresolvable conflict failure', () => {
     execSync(`git checkout ${origBranch}`, { cwd: repoPath })
 
     const info = await createWorktree(repoPath, 'task-src-conflict')
+    tmp.trackWorktree(info, repoPath)
     writeFileSync(join(info.path, 'conflict.ts'), 'export const value = "worker"')
     execSync('git add . && git commit -m "worker side"', { cwd: info.path })
 
@@ -307,6 +300,7 @@ describe('unresolvable conflict failure', () => {
     execSync(`git checkout ${origBranch}`, { cwd: repoPath })
 
     const info = await createWorktree(repoPath, 'task-partial')
+    tmp.trackWorktree(info, repoPath)
     writeFileSync(join(info.path, 'package-lock.json'), '{"worker": true}')
     writeFileSync(join(info.path, 'conflict.ts'), 'export const x = "worker"')
     execSync('git add . && git commit -m "worker side"', { cwd: info.path })
@@ -338,6 +332,7 @@ describe('unresolvable conflict failure', () => {
     execSync(`git checkout ${origBranch}`, { cwd: repoPath })
 
     const info = await createWorktree(repoPath, 'task-clean-fail')
+    tmp.trackWorktree(info, repoPath)
     writeFileSync(join(info.path, 'x.ts'), 'worker')
     execSync('git add . && git commit -m "worker"', { cwd: info.path })
 
@@ -351,14 +346,11 @@ describe('unresolvable conflict failure', () => {
 })
 
 describe('serialization guarantee', () => {
+  const tmp = useTempDir()
   let repoPath: string
 
   beforeEach(() => {
-    repoPath = makeRepo()
-  })
-
-  afterEach(() => {
-    rmSync(repoPath, { recursive: true, force: true })
+    repoPath = tmp.repo('mc-conflict-reduction-')
   })
 
   it('concurrent merges with update-before-merge both succeed', async () => {
@@ -367,10 +359,12 @@ describe('serialization guarantee', () => {
     const integBranch = `mc/run-${runId}`
 
     const info1 = await createWorktree(repoPath, 'task-cu-1')
+    tmp.trackWorktree(info1, repoPath)
     writeFileSync(join(info1.path, 'a.ts'), 'export const a = 1')
     execSync('git add . && git commit -m "add a"', { cwd: info1.path })
 
     const info2 = await createWorktree(repoPath, 'task-cu-2')
+    tmp.trackWorktree(info2, repoPath)
     writeFileSync(join(info2.path, 'b.ts'), 'export const b = 2')
     execSync('git add . && git commit -m "add b"', { cwd: info2.path })
 
@@ -394,11 +388,13 @@ describe('serialization guarantee', () => {
     const integBranch = `mc/run-${runId}`
 
     const info1 = await createWorktree(repoPath, 'task-cl-1')
+    tmp.trackWorktree(info1, repoPath)
     writeFileSync(join(info1.path, 'package-lock.json'), '{"task1": true}')
     writeFileSync(join(info1.path, 'feat1.ts'), 'export const f1 = 1')
     execSync('git add . && git commit -m "task1 changes"', { cwd: info1.path })
 
     const info2 = await createWorktree(repoPath, 'task-cl-2')
+    tmp.trackWorktree(info2, repoPath)
     writeFileSync(join(info2.path, 'package-lock.json'), '{"task2": true}')
     writeFileSync(join(info2.path, 'feat2.ts'), 'export const f2 = 2')
     execSync('git add . && git commit -m "task2 changes"', { cwd: info2.path })
