@@ -10,8 +10,8 @@ import { getTask, updateTask, listTasks } from './server/state/tasks.js'
 import { updateAgent } from './server/state/agents.js'
 import { handleSpawnWorker, handleRecoverTask } from './server/tools/orchestrator.js'
 import { shouldAttemptRecovery, applyRecoveryOutcome, MAX_RECOVERY_ATTEMPTS } from './spawner/auto-recovery.js'
-import { checkStuckWorkers, AGENT_NEVER_STARTED_REASON } from './spawner/stuck-watcher.js'
-import { killTmuxWindow, getChildProcessPid, reapOrphanWindows } from './spawner/tmux.js'
+import { checkStuckWorkers, startVerifyAgentStarted } from './spawner/stuck-watcher.js'
+import { killTmuxWindow, reapOrphanWindows } from './spawner/tmux.js'
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
@@ -24,6 +24,7 @@ interface AgentRow {
   id: string
   task_id: string | null
   cwd: string | null
+  repo_path: string | null
   pid: number | null
   status: string
 }
@@ -89,16 +90,24 @@ function startSpawnerWatcher(
       const retryKey = `${task.id}-${retryAttempt}`
       if (retried.has(retryKey)) continue
 
-      // Find cwd from the most recent agent for this task, or fall back to repo_path
-      // (repo_path is saved early in handleSpawnWorker before worktree creation, so it
-      // exists even when the agent was never registered due to a worktree creation failure).
+      // Resolve the real repo path for the retry spawn.
+      // prevAgent.cwd is the WORKTREE path (a temp dir), never the repo — using it would
+      // pass a linked worktree to handleSpawnWorker, which would then try to reconcile
+      // the already-checked-out task branch and throw "Refusing to reconcile".
+      // The authoritative source is prevAgent.repo_path (recorded by handleSpawnWorker),
+      // falling back to task.repo_path which is written early before worktree creation.
       const prevAgent = db.prepare(
         "SELECT * FROM agents WHERE task_id = ? ORDER BY created_at DESC LIMIT 1"
       ).get(task.id) as AgentRow | undefined
 
-      const retryCwd = prevAgent?.cwd ?? task.repo_path ?? null
+      const retryCwd = prevAgent?.repo_path ?? task.repo_path ?? null
       if (!retryCwd) {
-        console.warn(`[spawner] Cannot retry task ${task.id}: no cwd found for previous agent`)
+        console.error(`[spawner] Cannot retry task ${task.id}: no repo_path on previous agent or task record`)
+        db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+          task.id, 'error',
+          'Cannot retry: no repo_path found — manual intervention required'
+        )
+        retried.add(retryKey)
         continue
       }
 
@@ -125,6 +134,10 @@ function startSpawnerWatcher(
               void handleSpawnWorker(db, task.id, recoveryAgentId, { cwd: retryCwd }).then(spawnResult => {
                 if (!spawnResult.ok) {
                   console.error(`[spawner] Failed to respawn after recovery for task ${task.id}: ${spawnResult.error}`)
+                  db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+                    task.id, 'error',
+                    `recovery_respawn_failed: ${spawnResult.error}`
+                  )
                   updateTask(db, task.id, { status: 'failed' })
                 }
                 // Remove the key so a subsequent failure gets a fresh recovery attempt.
@@ -133,6 +146,10 @@ function startSpawnerWatcher(
             } else {
               // Needs human or unrecoverable — task already exhausted in applyRecoveryOutcome.
               console.warn(`[spawner] Task ${task.id} recovery verdict: ${result.verdict} — ${result.reason ?? 'no details'}`)
+              db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+                task.id, 'info',
+                `Recovery verdict: ${result.verdict} — ${result.reason ?? 'no details'}`
+              )
               retried.delete(retryKey)
             }
           })
@@ -180,6 +197,10 @@ function startSpawnerWatcher(
       void handleSpawnWorker(db, task.id, newAgentId, { cwd: retryCwd }).then(result => {
         if (!result.ok) {
           console.error(`[spawner] Failed to register retry worker for task ${task.id}: ${result.error}`)
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            task.id, 'error',
+            `retry_spawn_failed: ${result.error}`
+          )
           // Keep retry_count at retryAttempt (already written) so the next retry key
           // advances. Reverting to task.retry_count caused infinite loops because the
           // retried set was cleared while retry_count stayed at 0.
@@ -249,58 +270,10 @@ function startSpawnerWatcher(
       }
 
       // For tmux workers: verify the agent process actually started inside the pane.
-      // The pane shell sends keys but Enter may not land; the pid recorded above is
-      // the pane's shell, not claude. Poll asynchronously so we don't block the
-      // event loop. If no child process appears within ~4s the agent never started.
+      // Delegates to startVerifyAgentStarted in stuck-watcher.ts which polls for a
+      // child process of the pane shell and checks the busy footer before failing.
       if (handle.tmuxPane !== undefined && handle.pid !== undefined) {
-        const panePid = handle.pid
-        const capturedAgentId = agent.id
-        const capturedTaskId = agent.task_id!
-        const capturedPane = handle.tmuxPane
-
-        let verifyAttempts = 0
-        const maxVerifyAttempts = 5
-        const verifyIntervalMs = 800
-
-        const verifyAgentStarted = () => {
-          // If the agent has already exited or been marked (by onExit/onError), stop.
-          const agentRow = db.prepare('SELECT status FROM agents WHERE id = ?')
-            .get(capturedAgentId) as { status: string } | undefined
-          if (agentRow?.status !== 'spawning') return
-
-          const childPid = getChildProcessPid(panePid)
-
-          if (childPid !== undefined) {
-            // Agent process found — record the actual agent pid, not the shell
-            updateAgent(db, capturedAgentId, { pid: childPid })
-            return
-          }
-
-          verifyAttempts++
-          if (verifyAttempts < maxVerifyAttempts) {
-            setTimeout(verifyAgentStarted, verifyIntervalMs)
-            return
-          }
-
-          // All attempts exhausted — agent process never started
-          const current = db.prepare('SELECT status FROM agents WHERE id = ?')
-            .get(capturedAgentId) as { status: string } | undefined
-          if (current?.status !== 'spawning') return  // already handled
-
-          console.warn(`[spawner] ${AGENT_NEVER_STARTED_REASON} for agent ${capturedAgentId}`)
-          updateAgent(db, capturedAgentId, { status: 'failed' })
-          const t = getTask(db, capturedTaskId)
-          if (t && t.status !== 'done' && t.status !== 'failed') {
-            updateTask(db, capturedTaskId, { status: 'failed' })
-          }
-          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
-            capturedTaskId, 'error', AGENT_NEVER_STARTED_REASON
-          )
-          killTmuxWindow(capturedPane)
-        }
-
-        // Give the tmux send-keys a moment to execute before first check
-        setTimeout(verifyAgentStarted, 2000)
+        startVerifyAgentStarted(db, handle.pid, agent.id, agent.task_id!, handle.tmuxPane)
       }
 
       if (openTerminals) {

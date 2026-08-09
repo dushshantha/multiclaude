@@ -10,6 +10,7 @@ import {
   getRemoteUrl,
   pushBranch,
   getBranchSyncState,
+  isMainCheckout,
 } from '../src/git/ops.js'
 
 // Save and restore git env vars so tests that create temp repos are not
@@ -313,5 +314,72 @@ describe('getBranchSyncState', () => {
     const state = await getBranchSyncState(repoPath, 'feature/local-only')
     expect(state.exists).toBe(true)
     expect(state.existsOnRemote).toBe(false)
+  })
+})
+
+// ── isMainCheckout ────────────────────────────────────────────────────────────
+
+describe('isMainCheckout', () => {
+  let repoPath: string
+  let savedEnv: Record<string, string | undefined>
+
+  beforeEach(() => {
+    savedEnv = saveGitEnv()
+    clearGitEnv()
+    repoPath = mkdtempSync(join(tmpdir(), 'mc-ops-maincheckout-'))
+    execSync('git init', { cwd: repoPath })
+    execSync('git config user.email "test@test.com"', { cwd: repoPath })
+    execSync('git config user.name "Test"', { cwd: repoPath })
+    execSync('echo "init" > README.md && git add . && git commit -m "init"', { cwd: repoPath })
+  })
+
+  afterEach(() => {
+    restoreGitEnv(savedEnv)
+    rmSync(repoPath, { recursive: true, force: true })
+  })
+
+  it('returns true for the main working tree', async () => {
+    expect(await isMainCheckout(repoPath)).toBe(true)
+  })
+
+  it('returns false for a linked worktree created via git worktree add', async () => {
+    const worktreePath = mkdtempSync(join(tmpdir(), 'mc-ops-wt-'))
+    try {
+      execSync(`git worktree add ${worktreePath} -b test-wt-branch`, { cwd: repoPath })
+      expect(await isMainCheckout(worktreePath)).toBe(false)
+    } finally {
+      execSync(`git worktree remove --force ${worktreePath}`, { cwd: repoPath })
+      rmSync(worktreePath, { recursive: true, force: true })
+    }
+  })
+
+  it('returns false for a directory that is not a git repo', async () => {
+    const nonRepoDir = mkdtempSync(join(tmpdir(), 'mc-ops-nonrepo-'))
+    try {
+      expect(await isMainCheckout(nonRepoDir)).toBe(false)
+    } finally {
+      rmSync(nonRepoDir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns false for a path that does not exist', async () => {
+    expect(await isMainCheckout('/tmp/this-path-does-not-exist-mc-test')).toBe(false)
+  })
+
+  it('returns true even when GIT_EDITOR and EDITOR are set in process.env', async () => {
+    // Regression: simple-git's unsafe plugin rejects GIT_EDITOR/EDITOR,
+    // so passing them through caused isMainCheckout to throw and return false.
+    const savedEditor = process.env.EDITOR
+    const savedGitEditor = process.env.GIT_EDITOR
+    try {
+      process.env.EDITOR = 'vim'
+      process.env.GIT_EDITOR = 'nano'
+      expect(await isMainCheckout(repoPath)).toBe(true)
+    } finally {
+      if (savedEditor === undefined) delete process.env.EDITOR
+      else process.env.EDITOR = savedEditor
+      if (savedGitEditor === undefined) delete process.env.GIT_EDITOR
+      else process.env.GIT_EDITOR = savedGitEditor
+    }
   })
 })

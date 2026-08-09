@@ -160,7 +160,7 @@ The conflict worker's job: resolve each conflicted file, stage it, commit the me
 worker calls `report_done` → `handleReportDone` in [worker.ts](src/server/tools/worker.ts) marks task done and triggers `mergeWorktreeBranch` → `wait_for_event` unblocks in orchestrator → orchestrator spawns next wave of workers
 
 **Retry flow:**
-subprocess exits without calling `report_done` → spawner watcher marks agent `failed` → spawner watcher auto-retries up to `max_retries` (default 3) times → on final failure, orchestrator escalates to user
+subprocess exits without calling `report_done` → spawner watcher marks agent `failed` → spawner watcher auto-retries up to `max_retries` (default 3) times, always using the **project repo path** (not the worker's temp worktree) → on final failure, orchestrator escalates to user. Each agent row carries both `repo_path` (the main repository checkout, set by `isMainCheckout` guard in `handleSpawnWorker`) and `cwd` (the task's temp worktree). Retries must always receive the main repo path because `preflightReconcile` refuses to reconcile a branch that is already checked out in the directory it is operating on — passing a worktree (where the branch IS checked out) fails preflightReconcile deterministically and traps auto-recovery in `needs_human` status.
 
 ### Tmux worker runtime
 
@@ -185,7 +185,9 @@ Each worker runs in its own `mc-<taskId>` window. You can watch it live, scroll 
 - **Web dashboard** (`src/web/server.ts`, `src/web/public/run.html`): exposes `GET /api/peek/:agentId?lines=<n>` which calls `captureTmuxPane` and returns raw pane content. The run detail page shows a **PANE** tab (alongside LOGS) for tasks that have a tmux pane; it polls `/api/peek` every 2 seconds and renders the output line by line.
 - **Send/steer channel:** `sendToPane(target, text, opts)` types text into a pane and verifies submission by reading back pane content. It handles four Claude Code composer layouts (bordered, ghost-text, busy-footer, bare-prompt) and retries pressing Enter (without retyping the text) if the composer still shows the input after the first keystroke.
 
-**Busy-footer detection** (`src/spawner/stuck-watcher.ts`): before marking a tmux worker as stuck, the watcher calls `captureTmuxPane` and checks the last 6 non-blank lines for `"ESC to interrupt"` or `"working..."`. A pane showing a busy indicator is skipped — the worker is mid-turn, not stuck.
+**Agent-start verification and busy-footer protection** (`src/spawner/stuck-watcher.ts`): At spawn time, a polling loop verifies that the claude process actually started inside the tmux pane. The window is widened to ~47 seconds total (2s initial delay, then 30 attempts × 1.5s interval) to give cold claude starts headroom to initialize. When verification attempts are exhausted, before declaring failure, the watcher checks for a busy footer in the last 6 non-blank lines. If the pane shows `"ESC to interrupt"` or `"working..."`, the worker is mid-turn; the counter resets and polling continues rather than timing out. This protects against premature failure when Claude is legitimately processing.
+
+For running agents, the same busy-footer detection prevents false stuck warnings: before marking a worker as stuck, the watcher calls `captureTmuxPane` and checks for busy indicators. A pane showing activity is skipped — the worker is mid-turn, not stalled.
 
 ### MCP transport
 
@@ -457,6 +459,7 @@ When a task fails, attempt recovery before escalating. The recovery-first policy
    - **`recovered`**: Task was repaired automatically. Re-spawn it and continue without user involvement. Report as one line: `"✓ task-id recovered and re-spawned."`
    - **`unrecoverable` or `needs_human`**: Only escalate (see below)
    - Independently of the verdict: if `retry_count >= max_retries`, stop re-spawning and escalate — retries are genuinely exhausted
+3. When using `complete_task(task_id, summary)` as a recovery override: after calling it, check the returned `merged` flag and the task's `merged_into_run` field. If `merged` is `false` or the task's `merged_into_run` is not `true`, call `resolve_merge_conflict(task_id)` to re-drive the merge before proceeding to PR creation (do not escalate to the user unless `resolve_merge_conflict` returns `needs_human`).
 
 **Escalation phase** (only when recovery verdict isn't `recovered`):
 1. State what recovery already attempted and what was found
@@ -476,6 +479,7 @@ The orchestrator resolves git problems itself using MCP tools. Only escalate whe
 | All tasks done — need to open PR | Call `create_pr(run_id)`. Do not use any GitHub MCP tool directly. |
 | Integration branch not pushed / push rejected | Call `push_run_branch(run_id)` first, then retry `create_pr`. |
 | A task is in `merge_conflict` status | Call `resolve_merge_conflict(task_id)` — the tool attempts an automatic resolution. If it returns `resolved`, re-spawn the task. If it returns `needs_human`, escalate with the specific conflict details. |
+| A task is done but `merged_into_run` is false or null | Call `resolve_merge_conflict(task_id)` to re-drive the merge. This handles the case where the task branch exists but failed to land on the integration branch. |
 | Unsure what is blocking a PR (branch behind main, dirty state, etc.) | Call `git_status(run_id)` to get a snapshot of the integration branch state before deciding next steps. |
 | Git auth failure / credentials missing | Escalate to user immediately — this requires a human action outside the system. |
 | Force-push or history rewrite needed | Escalate to user — never do this autonomously. |
@@ -496,7 +500,7 @@ The orchestrator resolves git problems itself using MCP tools. Only escalate whe
 | `spawn_worker(task_id, agent_id, cwd)` | For every ready task, and after deps complete |
 | `cancel_task(task_id)` | When user wants to abort a task |
 | `recover_task(task_id)` | When a task fails — attempts automatic recovery; returns verdict (`recovered`, `unrecoverable`, or `needs_human`) |
-| `complete_task(task_id, summary)` | Recovery only — when worker did work but died without reporting |
+| `complete_task(task_id, summary)` | Recovery only — when worker did work but died without reporting. **Attempts to merge the task branch into the integration branch as part of the call.** Returns `{ ok, merged }`. If `merged` is false, the branch did not land; call `resolve_merge_conflict(task_id)` to re-drive the merge. |
 | `list_projects()` | List all projects with aggregate stats (task counts, run count, last_active_at) |
 | `list_runs(project_id?)` | List runs (optionally filtered by project); each shows task counts and derived_status |
 | `git_status(run_id)` | Get a snapshot of the integration branch state — use when unsure what is blocking a PR or before retrying a push |

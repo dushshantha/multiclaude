@@ -109,7 +109,9 @@ import {
   handlePushRunBranch,
   handleCreatePr,
   handleResolveMergeConflict,
+  handleCompleteTask,
 } from '../src/server/tools/orchestrator.js'
+import { MergeConflictError } from '../src/git/merge.js'
 
 // ---- Helpers --------------------------------------------------------------
 
@@ -515,5 +517,136 @@ describe('handleResolveMergeConflict', () => {
     expect(result.needsWorker).toBe(true)
     // The task status should NOT have been changed to done
     expect(getTask(db, 't1')?.status).toBe('failed')
+  })
+
+  it('re-drives merge for a done-but-unmerged task (escape hatch)', async () => {
+    setupProject(db)
+    db.prepare("INSERT INTO runs (id, project_id, title) VALUES ('run-1', 'p1', 'Run')").run()
+    createTask(db, { id: 't1', title: 'Test', run_id: 'run-1' })
+    updateTask(db, 't1', {
+      status: 'done',
+      merged_into_run: false,
+      branch: 'mc/t1',
+      repo_path: '/fake/repo',
+    })
+
+    const result = await handleResolveMergeConflict(db, 't1')
+    expect(result.ok).toBe(true)
+
+    const task = getTask(db, 't1')
+    expect(task?.status).toBe('done')
+    expect(task?.merged_into_run).toBe(true)
+    expect(mockEnsureIntegrationBranch).toHaveBeenCalledWith('/fake/repo', 'run-1')
+    expect(mockMergeWorktreeBranch).toHaveBeenCalled()
+  })
+
+  it('returns error for done task with null merged_into_run that is not actually done+unmerged eligible — fully merged task', async () => {
+    createTask(db, { id: 't1', title: 'Test' })
+    updateTask(db, 't1', {
+      status: 'done',
+      merged_into_run: true,
+    })
+
+    const result = await handleResolveMergeConflict(db, 't1')
+    expect(result.ok).toBe(false)
+    expect(result.detail).toContain('not in merge_conflict')
+  })
+})
+
+describe('handleCompleteTask', () => {
+  let db: Database.Database
+
+  beforeEach(() => {
+    db = createDb(':memory:')
+    resetMocks()
+  })
+  afterEach(() => closeDb(db))
+
+  it('marks the task done and attempts the merge when branch+worktree+repo_path present', async () => {
+    setupProject(db)
+    db.prepare("INSERT INTO runs (id, project_id, title) VALUES ('run-1', 'p1', 'Run')").run()
+    createTask(db, { id: 't1', title: 'Test', run_id: 'run-1' })
+    updateTask(db, 't1', {
+      status: 'in_progress',
+      branch: 'mc/t1',
+      worktree_path: '/tmp/mc-t1',
+      repo_path: '/fake/repo',
+    })
+
+    const result = await handleCompleteTask(db, 't1', 'worker finished')
+
+    expect(result.ok).toBe(true)
+    expect(result.merged).toBe(true)
+    expect(result.reason).toBeUndefined()
+
+    const task = getTask(db, 't1')
+    expect(task?.status).toBe('done')
+    expect(task?.merged_into_run).toBe(true)
+
+    expect(mockEnsureIntegrationBranch).toHaveBeenCalledWith('/fake/repo', 'run-1')
+    expect(mockMergeWorktreeBranch).toHaveBeenCalledWith('/fake/repo', 'mc/t1', 'run-1', '/tmp/mc-t1')
+  })
+
+  it('skips merge and does not throw when task has no branch', async () => {
+    createTask(db, { id: 't1', title: 'Test' })
+    updateTask(db, 't1', { status: 'in_progress' })
+
+    const result = await handleCompleteTask(db, 't1', 'worker finished without worktree')
+
+    expect(result.ok).toBe(true)
+    expect(result.merged).toBe(false)
+    expect(result.reason).toContain('no_branch')
+
+    const task = getTask(db, 't1')
+    expect(task?.status).toBe('done')
+    expect(task?.merged_into_run).toBeNull()
+
+    expect(mockMergeWorktreeBranch).not.toHaveBeenCalled()
+  })
+
+  it('skips merge when task has no worktree_path', async () => {
+    createTask(db, { id: 't1', title: 'Test' })
+    updateTask(db, 't1', {
+      status: 'in_progress',
+      branch: 'mc/t1',
+      repo_path: '/fake/repo',
+    })
+
+    const result = await handleCompleteTask(db, 't1', 'summary')
+
+    expect(result.ok).toBe(true)
+    expect(result.merged).toBe(false)
+    expect(result.reason).toContain('no_worktree_path')
+
+    expect(mockMergeWorktreeBranch).not.toHaveBeenCalled()
+  })
+
+  it('sets task to failed/merge_conflict and returns ok:false when merge conflicts', async () => {
+    mockMergeWorktreeBranch.mockRejectedValue(
+      new MergeConflictError('mc/t1', 'mc/run-run-1', ['src/api.ts'])
+    )
+
+    setupProject(db)
+    db.prepare("INSERT INTO runs (id, project_id, title) VALUES ('run-1', 'p1', 'Run')").run()
+    createTask(db, { id: 't1', title: 'Test', run_id: 'run-1' })
+    updateTask(db, 't1', {
+      status: 'in_progress',
+      branch: 'mc/t1',
+      worktree_path: '/tmp/mc-t1',
+      repo_path: '/fake/repo',
+    })
+
+    const result = await handleCompleteTask(db, 't1', 'summary')
+
+    expect(result.ok).toBe(false)
+    expect(result.merged).toBe(false)
+    expect(result.reason).toContain('merge_conflict')
+
+    const task = getTask(db, 't1')
+    expect(task?.status).toBe('failed')
+    expect(task?.failure_reason).toBe('merge_conflict')
+    expect(task?.conflicted_files).toContain('src/api.ts')
+    // worktree kept — conflict worker needs to inspect it
+    expect(task?.conflict_branch).toBe('mc/run-run-1')
   })
 })
