@@ -161,6 +161,52 @@ describe('orchestrator tools', () => {
     expect(result.ok).toBe(true)
   })
 
+  it('spawn_worker does not overwrite a good repo_path when handed a worktree path', async () => {
+    // Simulate the retry-loop scenario: task already has repo_path set to the main checkout,
+    // but spawn is called with a temp worktree path as cwd.
+    const worktreePath = mkdtempSync(join(tmpdir(), 'mc-orch-wt-'))
+    try {
+      execSync(`git worktree add ${worktreePath} -b guard-test-branch`, { cwd: repoPath })
+      db.prepare("INSERT INTO tasks (id, title, repo_path) VALUES ('guard-t1', 'Guard Task', ?)")
+        .run(repoPath)
+
+      const result = await handleSpawnWorker(db, 'guard-t1', 'w-guard-t1', { cwd: worktreePath })
+      expect(result.ok).toBe(true)
+
+      const task = db.prepare("SELECT repo_path, worktree_path FROM tasks WHERE id = 'guard-t1'").get() as {
+        repo_path: string; worktree_path: string | null
+      }
+      // repo_path must still point to the main checkout, not the worktree
+      expect(task.repo_path).toBe(repoPath)
+      expect(task.worktree_path).toBeTruthy()
+      if (task.worktree_path) rmSync(task.worktree_path, { recursive: true, force: true })
+    } finally {
+      execSync(`git worktree remove --force ${worktreePath}`, { cwd: repoPath }).toString()
+      rmSync(worktreePath, { recursive: true, force: true })
+    }
+  })
+
+  it('spawn_worker fails with repo_path_invalid when cwd is a worktree and task has no repo_path', async () => {
+    const worktreePath = mkdtempSync(join(tmpdir(), 'mc-orch-wt-invalid-'))
+    try {
+      execSync(`git worktree add ${worktreePath} -b guard-invalid-branch`, { cwd: repoPath })
+      db.prepare("INSERT INTO tasks (id, title) VALUES ('guard-t2', 'Guard Task 2')").run()
+
+      const result = await handleSpawnWorker(db, 'guard-t2', 'w-guard-t2', { cwd: worktreePath })
+      expect(result.ok).toBe(false)
+      expect((result as { ok: false; error: string }).error).toContain('not a main git checkout')
+
+      const task = db.prepare("SELECT status, failure_reason FROM tasks WHERE id = 'guard-t2'").get() as {
+        status: string; failure_reason: string
+      }
+      expect(task.status).toBe('failed')
+      expect(task.failure_reason).toBe('repo_path_invalid')
+    } finally {
+      execSync(`git worktree remove --force ${worktreePath}`, { cwd: repoPath })
+      rmSync(worktreePath, { recursive: true, force: true })
+    }
+  })
+
   it('wait_for_event returns immediately when status changes during wait', async () => {
     db.prepare("INSERT INTO tasks (id, title, status) VALUES ('t1', 'Task', 'pending')").run()
     setTimeout(() => {

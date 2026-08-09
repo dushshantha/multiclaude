@@ -40,6 +40,26 @@ export async function checkIsGitRepo(repoPath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Returns true only when `dir` is the main working tree of a git repository,
+ * not a linked worktree. Compares `git rev-parse --git-dir` with
+ * `git rev-parse --git-common-dir` — they are equal in the main checkout
+ * and differ in a linked worktree. Returns false (never throws) when `dir`
+ * is not a git repo or does not exist.
+ */
+export async function isMainCheckout(dir: string): Promise<boolean> {
+  try {
+    const g = git(dir)
+    const [gitDir, commonDir] = await Promise.all([
+      g.raw(['rev-parse', '--git-dir']),
+      g.raw(['rev-parse', '--git-common-dir']),
+    ])
+    return gitDir.trim() === commonDir.trim()
+  } catch {
+    return false
+  }
+}
+
 export async function hasRemote(repoPath: string): Promise<boolean> {
   // Use --local to avoid picking up a global [remote "origin"] from ~/.gitconfig
   try {
