@@ -365,4 +365,21 @@ describe('isMainCheckout', () => {
   it('returns false for a path that does not exist', async () => {
     expect(await isMainCheckout('/tmp/this-path-does-not-exist-mc-test')).toBe(false)
   })
+
+  it('returns true even when GIT_EDITOR and EDITOR are set in process.env', async () => {
+    // Regression: simple-git's unsafe plugin rejects GIT_EDITOR/EDITOR,
+    // so passing them through caused isMainCheckout to throw and return false.
+    const savedEditor = process.env.EDITOR
+    const savedGitEditor = process.env.GIT_EDITOR
+    try {
+      process.env.EDITOR = 'vim'
+      process.env.GIT_EDITOR = 'nano'
+      expect(await isMainCheckout(repoPath)).toBe(true)
+    } finally {
+      if (savedEditor === undefined) delete process.env.EDITOR
+      else process.env.EDITOR = savedEditor
+      if (savedGitEditor === undefined) delete process.env.GIT_EDITOR
+      else process.env.GIT_EDITOR = savedGitEditor
+    }
+  })
 })

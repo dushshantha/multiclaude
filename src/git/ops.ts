@@ -17,6 +17,16 @@ export function classifyPushFailure(stderr: string): PushFailureReason {
   return 'push_failed'
 }
 
+// simple-git's "unsafe" plugin rejects GIT_EDITOR and EDITOR, making every
+// call throw. Strip them along with the worktree-isolation vars.
+const EXCLUDED_ENV_VARS = new Set([
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_CEILING_DIRECTORIES',
+  'GIT_EDITOR',
+  'EDITOR',
+])
+
 /**
  * Create a simple-git instance that always operates on the repo at `repoPath`,
  * ignoring any GIT_DIR / GIT_WORK_TREE / GIT_CEILING_DIRECTORIES that the
@@ -25,7 +35,7 @@ export function classifyPushFailure(stderr: string): PushFailureReason {
 function git(repoPath: string): ReturnType<typeof simpleGit> {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined && k !== 'GIT_DIR' && k !== 'GIT_WORK_TREE' && k !== 'GIT_CEILING_DIRECTORIES') {
+    if (v !== undefined && !EXCLUDED_ENV_VARS.has(k)) {
       env[k] = v
     }
   }
@@ -44,8 +54,9 @@ export async function checkIsGitRepo(repoPath: string): Promise<boolean> {
  * Returns true only when `dir` is the main working tree of a git repository,
  * not a linked worktree. Compares `git rev-parse --git-dir` with
  * `git rev-parse --git-common-dir` — they are equal in the main checkout
- * and differ in a linked worktree. Returns false (never throws) when `dir`
- * is not a git repo or does not exist.
+ * and differ in a linked worktree. Returns false when `dir` is not a git repo
+ * or does not exist; re-throws unexpected errors so callers are not silently
+ * misled when a false value now blocks worker spawning.
  */
 export async function isMainCheckout(dir: string): Promise<boolean> {
   try {
@@ -55,8 +66,12 @@ export async function isMainCheckout(dir: string): Promise<boolean> {
       g.raw(['rev-parse', '--git-common-dir']),
     ])
     return gitDir.trim() === commonDir.trim()
-  } catch {
-    return false
+  } catch (err) {
+    // Not a git repo or doesn't exist — return false.
+    const msg = err instanceof Error ? err.message : String(err)
+    if (/not a git repository|does not exist|no such file/i.test(msg)) return false
+    // Re-throw anything else so unexpected failures don't silently block spawning.
+    throw err
   }
 }
 
