@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { ensureIntegrationBranch, mergeWorktreeBranch, RUN_INTEGRATION_BRANCH, MergeConflictError } from '../../src/git/merge.js'
 import { createWorktree, removeWorktree } from '../../src/git/worktree.js'
 import { execSync } from 'child_process'
-import { writeFileSync, existsSync } from 'fs'
+import { writeFileSync, existsSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { useTempDir } from '../helpers/temp.js'
@@ -227,5 +227,96 @@ describe('mergeWorktreeBranch temp dir cleanup', () => {
     expect(leaked).toHaveLength(0)
 
     await removeWorktree(repoPath, info)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Regression: mergeWorktreeBranch must tolerate a removed worktree and no-op
+// when the branch is already merged. Covers the livelock observed in run d3c5ad3d.
+// ---------------------------------------------------------------------------
+
+describe('mergeWorktreeBranch robustness — missing worktree and already-merged', () => {
+  const tmp = useTempDir()
+  let repoPath: string
+
+  beforeEach(() => {
+    repoPath = tmp.repo('mc-merge-robust-')
+  })
+
+  it('(a) succeeds when taskWorktreePath directory has been deleted — step 1 is skipped, step 2 runs', async () => {
+    const runId = 'robust-a'
+    await ensureIntegrationBranch(repoPath, runId)
+    const info = await createWorktree(repoPath, 'task-robust-a')
+    tmp.trackWorktree(info, repoPath)
+
+    writeFileSync(join(info.path, 'feature-a.ts'), 'export const a = 1')
+    execSync('git add . && git commit -m "add feature-a"', { cwd: info.path })
+
+    // Delete the worktree directory but keep the branch
+    rmSync(info.path, { recursive: true, force: true })
+    expect(existsSync(info.path)).toBe(false)
+
+    // The branch still exists — the merge must proceed via Step 2 (not throw on Step 1)
+    await expect(mergeWorktreeBranch(repoPath, info.branch, runId, info.path))
+      .resolves.not.toThrow()
+
+    // Verify the branch landed on the integration branch
+    const result = execSync(
+      `git merge-base --is-ancestor ${info.branch} mc/run-${runId} && echo yes || echo no`,
+      { cwd: repoPath }
+    ).toString().trim()
+    expect(result).toBe('yes')
+  })
+
+  it('(b) is a successful no-op when the task branch is already an ancestor of the integration branch', async () => {
+    const runId = 'robust-b'
+    await ensureIntegrationBranch(repoPath, runId)
+    const info = await createWorktree(repoPath, 'task-robust-b')
+    tmp.trackWorktree(info, repoPath)
+
+    writeFileSync(join(info.path, 'feature-b.ts'), 'export const b = 2')
+    execSync('git add . && git commit -m "add feature-b"', { cwd: info.path })
+
+    // First merge — succeeds normally
+    await mergeWorktreeBranch(repoPath, info.branch, runId)
+
+    // Capture integration branch HEAD after the first merge (before the no-op call)
+    const headBeforeNoOp = execSync(`git rev-parse mc/run-${runId}`, { cwd: repoPath }).toString().trim()
+
+    // Second merge — branch is already in the integration branch; must be a no-op
+    const result = await mergeWorktreeBranch(repoPath, info.branch, runId)
+    expect(result.alreadyMerged).toBe(true)
+    expect(result.push.ok).toBe(false)
+
+    // Integration branch must be unchanged (no spurious extra merge commit)
+    const headAfterNoOp = execSync(`git rev-parse mc/run-${runId}`, { cwd: repoPath }).toString().trim()
+    expect(headAfterNoOp).toBe(headBeforeNoOp)
+
+    await removeWorktree(repoPath, info)
+  })
+
+  it('(c) is a successful no-op when the task branch has been deleted entirely — exact livelock from run d3c5ad3d', async () => {
+    const runId = 'robust-c'
+    await ensureIntegrationBranch(repoPath, runId)
+    const info = await createWorktree(repoPath, 'task-robust-c')
+    tmp.trackWorktree(info, repoPath)
+
+    writeFileSync(join(info.path, 'feature-c.ts'), 'export const c = 3')
+    execSync('git add . && git commit -m "add feature-c"', { cwd: info.path })
+
+    // First merge — succeeds
+    await mergeWorktreeBranch(repoPath, info.branch, runId)
+
+    // Simulate removeWorktree: delete the worktree directory and branch (git branch -D)
+    await removeWorktree(repoPath, info)
+
+    // Confirm the branch is completely gone (local + never pushed = not on origin)
+    const localBranches = execSync('git branch', { cwd: repoPath }).toString()
+    expect(localBranches).not.toContain(info.branch)
+
+    // Second merge attempt — branch is gone; must return no-op without throwing
+    const result = await mergeWorktreeBranch(repoPath, info.branch, runId, info.path)
+    expect(result.alreadyMerged).toBe(true)
+    expect(result.push.ok).toBe(false)
   })
 })

@@ -1,5 +1,5 @@
 import { simpleGit } from 'simple-git'
-import { mkdtempSync } from 'fs'
+import { mkdtempSync, existsSync } from 'fs'
 import { rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join, basename } from 'path'
@@ -128,7 +128,7 @@ export async function mergeWorktreeBranch(
   branch: string,
   runId?: string,
   taskWorktreePath?: string,
-): Promise<{ push: PushResult }> {
+): Promise<{ push: PushResult; alreadyMerged?: true }> {
   const key = getIntegBranch(runId)
   const prev = mergeLocks.get(key) ?? Promise.resolve()
   let resolve!: () => void
@@ -140,10 +140,39 @@ export async function mergeWorktreeBranch(
     const git = simpleGit(repoPath)
     const integBranch = key
 
+    // SHORT-CIRCUIT: if the task branch is already an ancestor of the integration
+    // branch, the merge already landed — nothing to do. isMergedInto is robust to
+    // deleted local branches (falls back to origin/<branch>).
+    const alreadyMerged = await isMergedInto(repoPath, branch, integBranch)
+    if (alreadyMerged) {
+      return {
+        push: { ok: false, reason: 'already_merged', detail: `${branch} is already an ancestor of ${integBranch}` },
+        alreadyMerged: true,
+      }
+    }
+
+    // BRANCH-GONE: if the branch no longer exists locally or on origin, there is
+    // nothing left to merge. removeWorktree deletes the local branch with git branch -D;
+    // if the branch was never pushed, isMergedInto above would return false. Treat a
+    // fully-absent branch as a successful no-op rather than an error to break livelocks
+    // caused by retries after successful conflict-resolution cleanup.
+    let branchResolvable = false
+    for (const ref of [branch, `origin/${branch}`]) {
+      try { await git.revparse([ref]); branchResolvable = true; break } catch {}
+    }
+    if (!branchResolvable) {
+      return {
+        push: { ok: false, reason: 'already_merged', detail: `${branch} no longer exists locally or on origin` },
+        alreadyMerged: true,
+      }
+    }
+
     // Step 1: Bring task branch up to date with integration branch.
     // Merges the integration branch into the task branch so it integrates
     // against the latest state rather than a stale base.
-    if (taskWorktreePath) {
+    // This step is an optimisation — skip it when the worktree directory has been
+    // removed (e.g. cleaned up after a prior successful merge) rather than throwing.
+    if (taskWorktreePath && existsSync(taskWorktreePath)) {
       const upToDate = await isAncestorOf(git, integBranch, branch)
       if (!upToDate) {
         const taskGit = simpleGit(taskWorktreePath)
