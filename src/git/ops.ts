@@ -1,6 +1,6 @@
 import { simpleGit } from 'simple-git'
 
-export type PushFailureReason = 'no_remote' | 'auth_failed' | 'non_fast_forward' | 'branch_missing' | 'push_failed'
+export type PushFailureReason = 'no_remote' | 'auth_failed' | 'non_fast_forward' | 'branch_missing' | 'push_failed' | 'already_merged'
 
 export type PushResult =
   | { ok: true; remoteBranch: string }

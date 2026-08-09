@@ -120,13 +120,19 @@ export async function handleReportDone(
         await ensureIntegrationBranch(projectCwd, runId)
         const mergeResult = await mergeWorktreeBranch(projectCwd, task.branch, runId, task.worktree_path)
         mergedIntoRun = true
-        db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
-          taskId, 'info', `Merged ${task.branch} into ${integBranch}`
-        )
-        if (!mergeResult.push.ok) {
+        if (mergeResult.alreadyMerged) {
           db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
-            taskId, 'warn', `push_failed: ${mergeResult.push.reason}: ${mergeResult.push.detail}`
+            taskId, 'info', `Branch ${task.branch} already merged into ${integBranch} — no-op`
           )
+        } else {
+          db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+            taskId, 'info', `Merged ${task.branch} into ${integBranch}`
+          )
+          if (!mergeResult.push.ok) {
+            db.prepare('INSERT INTO logs (task_id, level, message) VALUES (?, ?, ?)').run(
+              taskId, 'warn', `push_failed: ${mergeResult.push.reason}: ${mergeResult.push.detail}`
+            )
+          }
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
