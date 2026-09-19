@@ -14,6 +14,7 @@ import type { PushResult } from '../../git/ops.js'
 import { createPullRequest } from '../../git/pr.js'
 import type { PrResult } from '../../git/pr.js'
 import { ensureIntegrationBranch, mergeWorktreeBranch, isAutoResolvable, RUN_INTEGRATION_BRANCH, MergeConflictError, isMergedInto } from '../../git/merge.js'
+import { normalizeModel, VALID_MODEL_VALUES } from '../../models.js'
 
 export const VALID_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type EffortValue = typeof VALID_EFFORT_VALUES[number]
@@ -73,7 +74,17 @@ export function handlePlanDag(
       }
       effort = normalized
     }
-    createTask(db, { id: t.id, title: t.title, description: t.description, model: t.model, effort, run_id, ticket: t.ticket })
+    let model: string | undefined = t.model
+    if (model !== undefined) {
+      const normalizedModel = normalizeModel(model)
+      if (normalizedModel === null) {
+        return {
+          error: `Invalid model "${model}" for task "${t.id}". Valid values: ${VALID_MODEL_VALUES.join(', ')}.`,
+        }
+      }
+      model = normalizedModel
+    }
+    createTask(db, { id: t.id, title: t.title, description: t.description, model, effort, run_id, ticket: t.ticket })
   }
   for (const t of epic.tasks) {
     for (const dep of t.dependsOn) {

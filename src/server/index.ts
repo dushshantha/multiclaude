@@ -8,6 +8,7 @@ import { handleGetMyTask, handleReportProgress, handleReportDone, handleReportBl
 import type Database from 'better-sqlite3'
 import type { Server } from 'http'
 import { z } from 'zod'
+import { VALID_MODEL_VALUES } from '../models.js'
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -105,7 +106,7 @@ export function createOrchestratorMcp(db: Database.Database): McpServer {
               id: z.string(),
               title: z.string(),
               description: z.string().optional(),
-              model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Model to use for this task (default: sonnet)'),
+              model: z.enum(VALID_MODEL_VALUES).optional().describe('Model tier for this task (default: sonnet). Valid values: haiku, sonnet, opus, fable.'),
               effort: z.preprocess(
                 (val) => val === 'extra' ? 'xhigh' : val,
                 z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional()
