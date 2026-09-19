@@ -179,8 +179,9 @@ When planning tasks, assign the appropriate model tier based on complexity. Use 
 | Tier | Model | Use when |
 |------|-------|----------|
 | haiku | claude-haiku-4-5 | Mechanical tasks: reformatting files, renaming symbols, writing boilerplate, adding type annotations, updating config files, moving files, generating fixtures/mocks |
-| sonnet | claude-sonnet-4-6 | Standard development: implementing features, writing tests, fixing bugs, refactoring, code review **(DEFAULT)** |
-| opus | claude-opus-4-6 | High-stakes/high-complexity: architecture decisions, security-critical code, novel algorithm design, tasks where mistakes are expensive to undo |
+| sonnet | claude-sonnet-5 | Standard development: implementing features, writing tests, fixing bugs, refactoring, code review **(DEFAULT)** |
+| opus | claude-opus-5 | High-stakes/high-complexity: architecture decisions, security-critical code, novel algorithm design, tasks where mistakes are expensive to undo |
+| fable | claude-fable-5-1 | Frontier reasoning and long-horizon agentic work where opus is not enough — genuinely open-ended design problems, multi-step reasoning chains, or tasks where the cost of a wrong answer is very high. **Most expensive tier (~2× opus per token); reserve it, do not use as a default.** Reach for fable over opus only when the task is open-ended / long-horizon or when getting it wrong is very costly; otherwise use opus. |
 
 If no model is specified, workers default to **sonnet**.
 
@@ -225,6 +226,7 @@ Effort and model are independent — infer them separately. A few examples:
 | "Implement rate limiting on /api/chat" | high | sonnet | Standard feature work **(default)** |
 | "Refactor auth to support multi-tenant token scopes" | xhigh | sonnet | Wide blast radius, non-trivial design |
 | "Design migration strategy for splitting the users table" | max | opus | Architecture decision, hard to undo |
+| "Design the overall agent coordination protocol for a new multi-agent runtime" | max | fable | Open-ended, long-horizon design; wrong answer is very costly and hard to reverse |
 
 ---
 
@@ -286,7 +288,7 @@ The orchestrator resolves git problems itself using MCP tools. Only escalate whe
 | Tool | When to use |
 |---|---|
 | `create_run(title, cwd, external_ref?)` | Before `plan_dag` when handling named tickets/features — creates a run and returns `run_id`. For multiple tickets, create ONE run with a combined title |
-| `plan_dag(epic)` | Once per decomposition — creates the DAG and returns ASCII visualization. Always pass `cwd` and optional `run_id`. Use the `ticket` field in tasks to label which issue each task belongs to (for multi-ticket runs), `model` for model tier, `effort` for reasoning effort, and `dependsOn` for cross-ticket dependencies |
+| `plan_dag(epic)` | Once per decomposition — creates the DAG and returns ASCII visualization. Always pass `cwd` and optional `run_id`. Use the `ticket` field in tasks to label which issue each task belongs to (for multi-ticket runs), `model` for model tier (`haiku`, `sonnet`, `opus`, or `fable`), `effort` for reasoning effort, and `dependsOn` for cross-ticket dependencies |
 | `AskUserQuestion` | Step 3 plan approval — show visualization and ask Proceed/Revise |
 | `get_system_status(include_done?)` | Instant snapshot — returns only active tasks by default (include_done=true to see all); always includes active_count and done_count |
 | `wait_for_event(timeout_seconds?, include_done?)` | **Monitoring loop** — blocks until something changes, then returns active tasks by default; always includes active_count and done_count |
