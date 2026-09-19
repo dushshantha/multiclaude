@@ -169,6 +169,20 @@ describe('spawner', () => {
     expect(args[args.indexOf('--model') + 1]).toBe('claude-opus-5')
   })
 
+  it('buildWorkerArgs passes --model with correct model ID for fable', () => {
+    const cfg: SpawnConfig = {
+      taskId: 'task-1',
+      taskTitle: 'Build JWT auth',
+      model: 'fable',
+      agentId: 'w-task-1',
+      worktreePath: '/tmp/mc-task-1',
+      mcpConfigPath: '/tmp/mc-worker-config.json',
+    }
+    const args = buildWorkerArgs(cfg)
+    expect(args).toContain('--model')
+    expect(args[args.indexOf('--model') + 1]).toBe('claude-fable-5-1')
+  })
+
   it('buildWorkerEnv removes CLAUDECODE to prevent nested session error', () => {
     const orig = process.env['CLAUDECODE']
     process.env['CLAUDECODE'] = '1'

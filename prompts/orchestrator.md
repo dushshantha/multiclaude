@@ -178,7 +178,7 @@ When planning tasks, assign the appropriate model tier based on complexity. Use 
 
 | Tier | Model | Use when |
 |------|-------|----------|
-| haiku | claude-haiku-4-5 | Mechanical tasks: reformatting files, renaming symbols, writing boilerplate, adding type annotations, updating config files, moving files, generating fixtures/mocks |
+| haiku | claude-haiku-4-5-20251001 | Mechanical tasks: reformatting files, renaming symbols, writing boilerplate, adding type annotations, updating config files, moving files, generating fixtures/mocks |
 | sonnet | claude-sonnet-5 | Standard development: implementing features, writing tests, fixing bugs, refactoring, code review **(DEFAULT)** |
 | opus | claude-opus-5 | High-stakes/high-complexity: architecture decisions, security-critical code, novel algorithm design, tasks where mistakes are expensive to undo |
 | fable | claude-fable-5-1 | Frontier reasoning and long-horizon agentic work where opus is not enough — genuinely open-ended design problems, multi-step reasoning chains, or tasks where the cost of a wrong answer is very high. **Most expensive tier (~2× opus per token); reserve it, do not use as a default.** Reach for fable over opus only when the task is open-ended / long-horizon or when getting it wrong is very costly; otherwise use opus. |

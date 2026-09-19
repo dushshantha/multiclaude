@@ -230,7 +230,7 @@ describe('orchestrator tools', () => {
           id: z.string(),
           title: z.string(),
           description: z.string().optional(),
-          model: z.enum(['haiku', 'sonnet', 'opus']).optional(),
+          model: z.enum(['haiku', 'sonnet', 'opus', 'fable']).optional(),
           ticket: z.string().optional(),
           dependsOn: z.array(z.string()),
         }))
