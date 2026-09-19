@@ -146,7 +146,7 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
   const totalTokens = tasks.reduce((sum, t) => sum + (t.total_tokens ?? 0), 0)
   const totalCost = tasks.reduce((sum, t) => {
     if (t.input_tokens == null && t.output_tokens == null) return sum
-    return sum + calculateCost(t.input_tokens ?? 0, t.output_tokens ?? 0, 'sonnet')
+    return sum + calculateCost(t.input_tokens ?? 0, t.output_tokens ?? 0, t.model ?? 'sonnet')
   }, 0)
 
   return (
@@ -204,6 +204,9 @@ function Dashboard({ db, refreshMs = 1000 }: DashboardProps) {
                 )}
                 {t.model === 'opus' && (
                   <Text color="magenta">  [opus]</Text>
+                )}
+                {t.model === 'fable' && (
+                  <Text color="cyan">  [fable]</Text>
                 )}
                 {stuck && <Text color="yellow">  ⏱ stuck</Text>}
                 {!stuck && t.retry_count > 0 && (

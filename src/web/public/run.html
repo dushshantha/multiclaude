@@ -36,6 +36,7 @@
     .model-badge.haiku { background: #14532d; color: #4ade80; }
     .model-badge.sonnet { background: #1e1e5e; color: #7c83fd; }
     .model-badge.opus { background: #3b0764; color: #c084fc; }
+    .model-badge.fable { background: #0c2a3a; color: #22d3ee; }
     .retry { color: #fbbf24; font-size: 11px; }
     .task-row { cursor: pointer; }
     .task-row:hover td { background: #1e1e3a; }
@@ -322,7 +323,7 @@
         const tokHtml = t.total_tokens
           ? `<span class="tokens">${formatTokens(t.total_tokens)}</span><div class="token-detail">${formatTokens(t.input_tokens)}↑ ${formatTokens(t.output_tokens)}↓</div>`
           : '-'
-        const modelKey = (t.model || '').toLowerCase().includes('haiku') ? 'haiku' : (t.model || '').toLowerCase().includes('opus') ? 'opus' : 'sonnet'
+        const modelKey = (t.model || '').toLowerCase().includes('fable') ? 'fable' : (t.model || '').toLowerCase().includes('haiku') ? 'haiku' : (t.model || '').toLowerCase().includes('opus') ? 'opus' : 'sonnet'
         const modelHtml = t.model ? `<span class="model-badge ${modelKey}">${escapeHtml(modelKey)}</span>` : '-'
         const costHtml = t.cost_usd ? `<span class="cost-val">${formatCost(t.cost_usd)}</span>` : '-'
         return `

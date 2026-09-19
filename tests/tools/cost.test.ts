@@ -18,8 +18,13 @@ describe('calculateCost', () => {
     expect(cost).toBeCloseTo(90.0) // $15 + $75
   })
 
-  it('matches on model substring (claude-sonnet-4-6)', () => {
-    const cost = calculateCost(1_000_000, 0, 'claude-sonnet-4-6')
+  it('calculates fable cost correctly', () => {
+    const cost = calculateCost(1_000_000, 1_000_000, 'fable')
+    expect(cost).toBeCloseTo(180.0) // $30 + $150
+  })
+
+  it('matches on model substring (claude-sonnet-5)', () => {
+    const cost = calculateCost(1_000_000, 0, 'claude-sonnet-5')
     expect(cost).toBeCloseTo(3.0)
   })
 
