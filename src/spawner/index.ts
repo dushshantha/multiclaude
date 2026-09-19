@@ -5,6 +5,7 @@ import { join, dirname } from 'path'
 import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
 import { readWorktreeGitDir } from '../git/worktree.js'
+import { MODEL_IDS, DEFAULT_MODEL } from '../models.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -19,12 +20,6 @@ export function resolveHookCommand(): string {
   }
   const tsPath = join(__dirname, 'worktree-guard-hook.ts')
   return `npx tsx ${JSON.stringify(tsPath)}`
-}
-
-const MODEL_IDS: Record<string, string> = {
-  haiku: 'claude-haiku-4-5-20251001',
-  sonnet: 'claude-sonnet-4-6',
-  opus: 'claude-opus-4-6',
 }
 
 export interface SpawnConfig {
@@ -127,8 +122,8 @@ export function buildWorkerArgs(cfg: SpawnConfig): string[] {
   const outputFormat = cfg.openTerminals ? 'text' : 'stream-json'
   const extraFlags = cfg.openTerminals ? [] : ['--verbose']
 
-  const modelKey = cfg.model ?? 'sonnet'
-  const modelId = MODEL_IDS[modelKey] ?? MODEL_IDS.sonnet
+  const modelKey = cfg.model ?? DEFAULT_MODEL
+  const modelId = MODEL_IDS[modelKey as keyof typeof MODEL_IDS] ?? MODEL_IDS[DEFAULT_MODEL]
 
   // Only emit --effort when explicitly set to a non-default value ('high' is Claude Code's default)
   const effortFlags = (cfg.effort && cfg.effort !== 'high') ? ['--effort', cfg.effort] : []
