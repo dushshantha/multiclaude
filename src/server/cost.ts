@@ -7,11 +7,12 @@ export const DEFAULT_PRICES: Record<string, ModelPricing> = {
   sonnet: { inputPerMillion: 3.0, outputPerMillion: 15.0 },
   haiku: { inputPerMillion: 0.80, outputPerMillion: 4.0 },
   opus: { inputPerMillion: 15.0, outputPerMillion: 75.0 },
+  fable: { inputPerMillion: 30.0, outputPerMillion: 150.0 },
 }
 
 /**
  * Calculate cost in USD for a given token usage and model.
- * Model matching is case-insensitive substring: "claude-sonnet-4-6" → "sonnet".
+ * Model matching is case-insensitive substring: "claude-sonnet-5" → "sonnet".
  * Falls back to "sonnet" pricing if the model string doesn't match any known tier.
  */
 export function calculateCost(
