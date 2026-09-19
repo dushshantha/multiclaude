@@ -413,4 +413,32 @@ describe('last_log_at heartbeat field in system status', () => {
     expect(t1.last_log_at).toBe('2026-01-01T12:00:00.000Z')
     expect(t2.last_log_at).toBeNull()
   })
+
+  it('plan_dag accepts fable model tier and stores it', () => {
+    const epic = {
+      tasks: [
+        { id: 'a', title: 'Frontier task', model: 'fable', dependsOn: [] },
+      ]
+    }
+    const result = handlePlanDag(db, epic)
+    expect('visualization' in result).toBe(true)
+    const tasks = db.prepare('SELECT id, model FROM tasks ORDER BY id').all() as { id: string; model: string }[]
+    expect(tasks.find(t => t.id === 'a')?.model).toBe('fable')
+  })
+
+  it('plan_dag returns error for unknown model tier and creates no tasks', () => {
+    const epic = {
+      tasks: [
+        { id: 'a', title: 'Typo task', model: 'opus5', dependsOn: [] },
+      ]
+    }
+    const result = handlePlanDag(db, epic)
+    expect('error' in result).toBe(true)
+    expect((result as { error: string }).error).toContain('Invalid model "opus5"')
+    expect((result as { error: string }).error).toContain('task "a"')
+    expect((result as { error: string }).error).toContain('haiku')
+    expect((result as { error: string }).error).toContain('fable')
+    const tasks = db.prepare('SELECT * FROM tasks').all()
+    expect(tasks).toHaveLength(0)
+  })
 })
